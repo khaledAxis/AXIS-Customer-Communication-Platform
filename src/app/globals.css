@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens. A system font stack is used intentionally instead of a
+ * Latin-only web font so Hebrew and Arabic render correctly without a
+ * build-time font dependency. Revisit font choice at the multilingual
+ * milestone (M6) if brand typography is required.
+ */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, "Noto Sans Hebrew", "Noto Sans Arabic", "Arial Hebrew", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  font-family: var(--font-sans);
+}
