@@ -1,8 +1,19 @@
 # ADR-0006: Contact partial-data model & required-fields reconciliation
 
-- **Status:** Accepted (needs business validation)
-- **Date:** 2026-08-16
+- **Status:** Accepted (nullable/eligibility parts) — **origin & dedupe reasoning superseded by
+  [ADR-0007](0007-monday-crm-source-of-truth.md)** (2026-08-17)
+- **Date:** 2026-08-16 (amended 2026-08-17)
 - **Deciders:** Administrator/developer (architect)
+
+> **Amendment (2026-08-17):** CRM master data now comes from **Monday.com**, not Hashavshevet/CSV
+> (see ADR-0007). This ADR's **still-valid** contribution is the **nullable / incomplete-data model**
+> and **derived email eligibility** — Monday items also have empty columns, so contacts must import
+> partially and eligibility stays a derived, send-time predicate. **Obsolete** below (kept as
+> historical context): the "imported from Hashavshevet via Excel/CSV" framing, and the identity/dedupe
+> reasoning based on **normalized email** and **`sourceSystem + externalId`**. Under ADR-0007 the CRM
+> identity key is the composite **`(mondayBoardId, mondayItemId)`**, and the `DUPLICATE → merge`
+> import class becomes a **`CONFLICT`/report** signal (Monday owns record merges). Read the sections
+> below with this amendment in mind.
 
 ## Context
 

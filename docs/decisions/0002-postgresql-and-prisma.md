@@ -8,10 +8,10 @@
 
 The domain is strongly relational (companies, contacts, taxonomy, segments, campaigns, recipients,
 events, audit) and **data integrity is a hard requirement**: foreign keys, uniqueness (idempotent
-send ledger, single active unsubscribe), enum constraints, and transactional multi-row mutations
-(import commit, send + audit). Imported data is often incomplete, so the schema must allow many
-nullable columns while still enforcing the few real invariants. The brief proposes PostgreSQL +
-Prisma.
+send ledger, single active unsubscribe, composite CRM identity), enum constraints, and transactional
+multi-row mutations (CRM sync commit, send + audit). CRM data mirrored from Monday.com (ADR-0007) is
+often incomplete, so the schema must allow many nullable columns while still enforcing the few real
+invariants. The brief proposes PostgreSQL + Prisma.
 
 ## Decision
 
@@ -31,7 +31,7 @@ Use **PostgreSQL** as the database and **Prisma** as the ORM and migration tool.
 - **Raw SQL / query builder (Kysely):** maximum control but more boilerplate and manual typing; not
   justified at this scale.
 - **MySQL/SQLite:** SQLite is too limited for concurrent writes and constraints we need; PostgreSQL's
-  enums, partial indexes, and JSON support fit the requirements (e.g. `rawSource` audit JSON).
+  enums, partial indexes, and JSON support fit the requirements (e.g. `rawItem` Monday-snapshot JSON).
 
 ## Consequences
 

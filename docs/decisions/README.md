@@ -39,7 +39,11 @@ default awaiting confirmation from stakeholders.
 | [0003](0003-authentication-with-authjs.md) | Authentication & authorization with Auth.js + server-side RBAC | Accepted |
 | [0004](0004-email-provider-abstraction.md) | Email provider behind an internal port; vendor deferred | Accepted (vendor TBD) |
 | [0005](0005-job-queue-strategy.md) | Defer Redis/BullMQ; in-process scheduling first | Accepted |
-| [0006](0006-contact-data-model-and-required-fields.md) | Contact partial-data model & required-fields reconciliation | Accepted (needs business validation) |
+| [0006](0006-contact-data-model-and-required-fields.md) | Contact partial-data model & required-fields reconciliation | Accepted — origin/dedupe **amended by ADR-0007** |
+| [0007](0007-monday-crm-source-of-truth.md) | Monday.com as the CRM source of truth (platform is a read-only projection) | Accepted |
+| [0008](0008-test-safe-send-mode-and-unsubscribe.md) | Test/Safe-send mode & locally-owned, sync-immune unsubscribe | Accepted |
+| [0009](0009-communication-address-and-dedup-ledger.md) | CommunicationAddress, deduplicated delivery ledger & test-send isolation | Accepted — **authoritative for the data model** |
+| [0010](0010-newsletter-automation-and-content.md) | Recurring newsletter automation, multi-content composition & reviewed external content | Accepted |
 
 ---
 

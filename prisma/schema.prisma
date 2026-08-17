@@ -1,0 +1,947 @@
+// AXIS Customer Communication Platform — Prisma schema
+// Authoritative data model: docs/decisions/0009-communication-address-and-dedup-ledger.md
+// (refines ADR-0006 / ADR-0007). PostgreSQL only. All schema changes via migrations.
+//
+// Ownership legend used in comments:
+//   [M]  = MONDAY_OWNED (mirrored, read-only, overwritten by sync — NEVER hand-edited)
+//   [L]  = LOCAL_OWNED  (a Monday sync must NEVER overwrite these)
+//   [S]  = SYSTEM_METADATA (identity / provenance / timestamps)
+//   [H]  = IMMUTABLE_HISTORY (audit-safe; preserved across CRM churn)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 7: the connection URL lives in prisma.config.ts (env DATABASE_URL), not here.
+}
+
+// ============================================================================
+// Enums
+// ============================================================================
+enum Role {
+  ADMIN
+  MANAGER
+}
+
+enum CrmSource {
+  MONDAY
+}
+
+enum CrmBoardKind {
+  CUSTOMERS
+  CONTACTS
+  PRODUCTS
+  CUSTOMER_PRODUCTS
+}
+
+enum Language {
+  HE
+  AR
+  UNKNOWN
+}
+
+enum ConsentStatus {
+  UNKNOWN
+  GRANTED
+  DENIED
+}
+
+enum EmailStatus {
+  UNKNOWN
+  VALID
+  INVALID
+}
+
+enum CompanyCrmStatus {
+  POTENTIAL
+  ACTIVE
+  INACTIVE
+  UNKNOWN
+}
+
+enum CampaignStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  SCHEDULED
+  SENDING
+  SENT
+  CANCELED
+  FAILED
+}
+
+enum SendMode {
+  TEST
+  PRODUCTION
+}
+
+enum CampaignRecipientState {
+  PENDING
+  READY
+  SENDING
+  SENT
+  FAILED
+}
+
+enum TestSendState {
+  QUEUED
+  SENT
+  FAILED
+}
+
+enum EmailSourceType {
+  COMPANY_EMAIL
+  CONTACT_EMAIL
+}
+
+enum ExclusionReason {
+  NO_EMAIL
+  INVALID_EMAIL
+  UNSUBSCRIBED
+  SUPPRESSED
+  CONSENT_DENIED
+  COMPANY_INACTIVE
+  ARCHIVED
+  LANGUAGE_UNKNOWN
+}
+
+enum CampaignEventType {
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCE
+  COMPLAINT
+  UNSUBSCRIBE
+  DEFERRED
+  DROPPED
+  FAILED
+}
+
+enum SuppressionReason {
+  HARD_BOUNCE
+  COMPLAINT
+  MANUAL
+  PROVIDER_PERMANENT
+}
+
+enum UnsubscribeScope {
+  GLOBAL
+}
+
+enum UnsubscribeSource {
+  RECIPIENT_LINK
+  MANUAL
+  PROVIDER_WEBHOOK
+  IMPORT
+}
+
+enum ContentOrigin {
+  INTERNAL
+  INGESTED
+}
+
+enum ContentSourceKind {
+  INTERNAL
+  RSS
+  WEBSITE
+  API
+  MANUAL_EXTERNAL
+}
+
+enum ContentReviewState {
+  NEW
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum Cadence {
+  WEEKLY
+  MONTHLY
+}
+
+enum AutomationMode {
+  ASSISTED
+}
+
+enum AutomationRunStatus {
+  PENDING
+  PREPARING
+  PREPARED
+  FAILED
+  SKIPPED
+}
+
+enum IngestionRunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum SyncTrigger {
+  MANUAL
+  SCHEDULED
+  WEBHOOK
+  BOOTSTRAP
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum SyncItemAction {
+  UPSERT
+  ARCHIVE
+  SKIP
+  ERROR
+}
+
+enum SyncItemClass {
+  SENDABLE
+  INCOMPLETE
+  NO_EMAIL
+  INVALID_EMAIL
+  CONFLICT
+  ERROR
+}
+
+enum AuditAction {
+  CAMPAIGN_CREATED
+  CAMPAIGN_SUBMITTED
+  CAMPAIGN_APPROVED
+  CAMPAIGN_REJECTED
+  CAMPAIGN_SCHEDULED
+  CAMPAIGN_SENT
+  CAMPAIGN_CANCELED
+  SEND_MODE_CHANGED
+  PRODUCTION_ENABLED
+  UNSUBSCRIBE
+  SUPPRESSION
+  CRM_SYNC
+  ADMIN_CHANGE
+}
+
+// ============================================================================
+// Email-centric communication profile (LOCAL, sync-immune)
+// ============================================================================
+model CommunicationAddress {
+  id              String        @id @default(cuid())
+  normalizedEmail String        @unique // [S] globally-unique communication identity
+  emailStatus     EmailStatus   @default(UNKNOWN) // [L]
+  language        Language      @default(UNKNOWN) // [L] never inferred
+  consentStatus   ConsentStatus @default(UNKNOWN) // [L] never inferred
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  recipients   CampaignRecipient[]
+  unsubscribes Unsubscribe[]
+  suppressions Suppression[]
+
+  @@index([emailStatus])
+  @@index([language])
+  @@index([consentStatus])
+}
+
+// ============================================================================
+// CRM projections (Monday-owned)
+// ============================================================================
+model Company {
+  id                String           @id @default(cuid())
+  mondayBoardId     String // [S]
+  mondayItemId      String // [S]
+  source            CrmSource        @default(MONDAY) // [S]
+  mondayUpdatedAt   DateTime? // [S]
+  syncedAt          DateTime? // [S]
+  archivedAt        DateTime? // [S] local archive marker
+  mondayDeletedAt   DateTime? // [S]
+  rawItem           Json? // [S] raw Monday snapshot
+  name              String? // [M]
+  companyNumber     String? // [M] ח.פ
+  hashavshevetId    String? // [M]
+  accountKey        String? // [M]
+  companyEmail      String? // [M] מייל חברה — campaign candidate
+  companyEmailNorm  String? // [S] derived lookup
+  accountingEmail   String? // [M] מייל להנה"ח — NEVER a campaign candidate
+  companyPhone      String? // [M]
+  category          String? // [M] free-text Monday value
+  customerStatus    CompanyCrmStatus @default(UNKNOWN) // [M] normalized
+  customerStatusRaw String? // [M] raw label
+  city              String? // [M]
+  address           String? // [M]
+  industryId        String? // [M]-derived ref
+  classificationId  String? // [M]-derived ref
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  industry        Industry?                 @relation(fields: [industryId], references: [id], onDelete: SetNull)
+  classification  CustomerClassification?   @relation(fields: [classificationId], references: [id], onDelete: SetNull)
+  contactLinks    CompanyContact[]
+  ownedProducts   CustomerProduct[]
+  catalogueLinks  CompanyProduct[]
+  recipientSource CampaignRecipientSource[]
+
+  @@unique([mondayBoardId, mondayItemId])
+  @@index([companyEmailNorm])
+  @@index([customerStatus])
+  @@index([industryId])
+  @@index([classificationId])
+  @@index([archivedAt])
+  @@index([syncedAt])
+}
+
+model Contact {
+  id              String    @id @default(cuid())
+  mondayBoardId   String // [S]
+  mondayItemId    String // [S]
+  source          CrmSource @default(MONDAY) // [S]
+  mondayUpdatedAt DateTime? // [S]
+  syncedAt        DateTime? // [S]
+  archivedAt      DateTime? // [S]
+  mondayDeletedAt DateTime? // [S]
+  rawItem         Json? // [S]
+  fullName        String? // [M] no first/last split in v1
+  email           String? // [M] raw
+  emailNorm       String? // [S] derived lookup
+  phone           String? // [M]
+  jobTitle        String? // [M]
+  address         String? // [M]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  // NOTE: emailStatus / language / consentStatus intentionally NOT here — see CommunicationAddress.
+  // NOTE: no CRM status column exists in Monday for contacts (do not invent ACTIVE/INACTIVE).
+
+  companyLinks    CompanyContact[]
+  ownedProducts   CustomerProduct[]
+  recipientSource CampaignRecipientSource[]
+
+  @@unique([mondayBoardId, mondayItemId])
+  @@index([emailNorm])
+  @@index([archivedAt])
+}
+
+// Many-to-many Company <-> Contact (mirrors Monday Connect Boards)
+model CompanyContact {
+  id         String       @id @default(cuid())
+  companyId  String
+  contactId  String
+  assertedBy CrmBoardKind // which board's relation column asserted the link
+  syncedAt   DateTime?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, contactId])
+  @@index([contactId])
+}
+
+// Reference tables (Company-level taxonomy from Monday status labels)
+model Industry {
+  id               String    @id @default(cuid())
+  mondayColumnId   String // color_mkprbck1
+  mondayLabelIndex Int
+  label            String // current display (may be renamed without corrupting history)
+  colorVarName     String?
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  companies        Company[]
+
+  @@unique([mondayColumnId, mondayLabelIndex])
+}
+
+model CustomerClassification {
+  id               String    @id @default(cuid())
+  mondayColumnId   String // color_mm1gzaje
+  mondayLabelIndex Int
+  label            String
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  companies        Company[]
+
+  @@unique([mondayColumnId, mondayLabelIndex])
+}
+
+// Product catalogue projection (board 1903021552)
+model Product {
+  id            String            @id @default(cuid())
+  mondayBoardId String
+  mondayItemId  String
+  name          String? // [M]
+  itemKey       String? // [M] מפתח פריט
+  sku           String? // [M] מק"ט
+  catalogLink   String? // [M] קטלוג מוצרים
+  itemType      String? // [M] סוג פריט (mirrored label string)
+  rawItem       Json?
+  syncedAt      DateTime?
+  archivedAt    DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  instances     CustomerProduct[]
+  companyLinks  CompanyProduct[]
+
+  @@unique([mondayBoardId, mondayItemId])
+  @@index([itemType])
+}
+
+// Owned product instance / subscription (board 1903021951)
+model CustomerProduct {
+  id                    String    @id @default(cuid())
+  mondayBoardId         String
+  mondayItemId          String
+  companyId             String? // ← לקוח (nav only)
+  contactId             String? // ← איש קשר (nav only)
+  productId             String? // ← מוצר (catalogue)
+  status                String? // סטטוס
+  purchaseDate          DateTime?
+  hardwareWarrantyUntil DateTime?
+  softwareWarrantyUntil DateTime?
+  subscriptionUntil     DateTime?
+  subscriptionLoginId   String?
+  billingType           String?
+  includesCommsPackage  Boolean?
+  simCount              Int?
+  rawItem               Json?
+  syncedAt              DateTime?
+  archivedAt            DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([mondayBoardId, mondayItemId])
+  @@index([companyId])
+  @@index([contactId])
+  @@index([productId])
+  @@index([subscriptionUntil])
+  @@index([status])
+}
+
+// Optional/secondary: direct Company -> catalogue association (board_relation_mkrydxdp)
+model CompanyProduct {
+  id        String    @id @default(cuid())
+  companyId String
+  productId String
+  syncedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, productId])
+  @@index([productId])
+}
+
+// ============================================================================
+// Users / content / segments / campaigns (local)
+// ============================================================================
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  role         Role     @default(MANAGER)
+  passwordHash String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  createdCampaigns  Campaign[] @relation("CampaignCreator")
+  approvedCampaigns Campaign[] @relation("CampaignApprover")
+}
+
+model ContentItem {
+  id          String             @id @default(cuid())
+  title       String
+  summary     String? // excerpt/summary — external items may be link+title+summary only
+  language    Language           @default(UNKNOWN) // UNKNOWN valid during ingestion; human review can correct
+  origin      ContentOrigin      @default(INTERNAL)
+  reviewState ContentReviewState @default(APPROVED) // ingestion service creates INGESTED items as PENDING_REVIEW
+  subject     String?
+  preheader   String?
+  bodyHtml    String? // optional — external content may not carry full HTML
+  bodyText    String?
+  // external / ingested provenance
+  sourceId    String?
+  sourceName  String? // display origin name (e.g. "Trimble")
+  author      String?
+  externalId  String? // stable id from the source (dedup)
+  externalUrl String?
+  publishedAt DateTime?
+  ingestedAt  DateTime?
+  createdById String? // internal content author
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  source        ContentSource?        @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  campaignLinks CampaignContentItem[]
+
+  @@unique([sourceId, externalId]) // idempotent external ingestion where both present
+  @@index([reviewState])
+  @@index([origin])
+  @@index([language])
+  @@index([sourceId])
+}
+
+model Segment {
+  id          String                 @id @default(cuid())
+  name        String
+  description String?
+  criteria    Json // validated structured filter tree (AND/OR)
+  isActive    Boolean                @default(true)
+  createdById String?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  campaigns   Campaign[]
+  automations NewsletterAutomation[]
+}
+
+model Campaign {
+  id                String         @id @default(cuid())
+  name              String
+  language          Language
+  status            CampaignStatus @default(DRAFT)
+  sendMode          SendMode       @default(TEST) // TEST is the default
+  segmentId         String?
+  // content snapshot frozen at submit/approve → history reproducible (authoritative record of what was sent)
+  snapshotSubject   String?
+  snapshotPreheader String?
+  snapshotBodyHtml  String?
+  snapshotBodyText  String?
+  snapshotAt        DateTime?
+  createdById       String
+  approvedById      String? // four-eyes: must differ from creator (enforced server-side)
+  approvedAt        DateTime?
+  rejectionReason   String?
+  scheduledAt       DateTime?
+  sentAt            DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  creator       User                        @relation("CampaignCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approver      User?                       @relation("CampaignApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  segment       Segment?                    @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  contentLinks  CampaignContentItem[] // ordered multi-content composition
+  recipients    CampaignRecipient[] // Restrict — history protected
+  events        CampaignEvent[] // Restrict — history protected
+  testSends     CampaignTestSend[] // Restrict — history protected
+  snapshots     CampaignAudienceSnapshot[] // Cascade — re-derivable preview
+  exclusions    CampaignAudienceExclusion[] // Cascade — re-derivable preview
+  automationRun NewsletterAutomationRun? // set when generated by a recurring automation
+
+  @@index([status])
+  @@index([scheduledAt])
+}
+
+// ============================================================================
+// Content composition, sources, external ingestion & recurring automation
+// ============================================================================
+
+// Ordered multi-content composition (Campaign <-> ContentItem)
+model CampaignContentItem {
+  id                  String    @id @default(cuid())
+  campaignId          String
+  contentItemId       String
+  position            Int
+  isIncluded          Boolean   @default(true)
+  customHeading       String?
+  customIntro         String?
+  // immutable snapshot frozen at approval/send (history reproducible)
+  snapshotTitle       String?
+  snapshotBodyHtml    String?
+  snapshotBodyText    String?
+  snapshotExternalUrl String?
+  snapshotAt          DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  campaign    Campaign    @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contentItem ContentItem @relation(fields: [contentItemId], references: [id], onDelete: Restrict)
+
+  @@unique([campaignId, contentItemId]) // no accidental duplicate inclusion of the same item
+  @@index([campaignId, position])
+  @@index([contentItemId])
+}
+
+// Approved content sources (internal + external)
+model ContentSource {
+  id        String            @id @default(cuid())
+  name      String
+  kind      ContentSourceKind
+  baseUrl   String?
+  isEnabled Boolean           @default(true)
+  config    Json? // review/trust configuration (no secrets)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  items         ContentItem[]
+  ingestionRuns ContentIngestionRun[]
+
+  @@index([kind])
+  @@index([isEnabled])
+}
+
+// Lightweight external ingestion history (NO network fetching implemented yet)
+model ContentIngestionRun {
+  id              String             @id @default(cuid())
+  sourceId        String
+  status          IngestionRunStatus @default(RUNNING)
+  startedAt       DateTime           @default(now())
+  completedAt     DateTime?
+  discoveredCount Int                @default(0)
+  createdCount    Int                @default(0)
+  duplicateCount  Int                @default(0)
+  errorCount      Int                @default(0)
+  errorMessage    String?
+  createdAt       DateTime           @default(now())
+
+  source ContentSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId])
+  @@index([status])
+}
+
+// Recurring newsletter automation — ASSISTED by default (prepares drafts; never auto-sends)
+model NewsletterAutomation {
+  id              String         @id @default(cuid())
+  name            String
+  isEnabled       Boolean        @default(true) // paused when false
+  mode            AutomationMode @default(ASSISTED)
+  cadence         Cadence
+  interval        Int            @default(1) // every N weeks/months
+  dayOfWeek       Int? // 0-6 (WEEKLY)
+  dayOfMonth      Int? // 1-31 (MONTHLY)
+  weekOfMonth     Int? // optional nth week (MONTHLY)
+  timezone        String         @default("Asia/Jerusalem")
+  recurrence      Json? // optional structured recurrence (internal; never RRULE exposed to users)
+  language        Language
+  segmentId       String?
+  nextScheduledAt DateTime?
+  lastRunAt       DateTime?
+  createdById     String
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  segment Segment?                  @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  runs    NewsletterAutomationRun[]
+
+  @@index([isEnabled])
+  @@index([nextScheduledAt])
+  @@index([segmentId])
+}
+
+// One run per (automation, scheduled occurrence) — idempotent campaign generation
+model NewsletterAutomationRun {
+  id                  String              @id @default(cuid())
+  automationId        String
+  scheduledFor        DateTime
+  status              AutomationRunStatus @default(PENDING)
+  startedAt           DateTime?
+  completedAt         DateTime?
+  generatedCampaignId String?             @unique
+  errorMessage        String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  automation        NewsletterAutomation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  generatedCampaign Campaign?            @relation(fields: [generatedCampaignId], references: [id], onDelete: SetNull)
+
+  @@unique([automationId, scheduledFor]) // at most one run per occurrence → idempotent
+  @@index([automationId])
+  @@index([status])
+}
+
+// ============================================================================
+// Deduplicated production delivery ledger (one per campaign + normalized email)
+// ============================================================================
+model CampaignRecipient {
+  id                     String                 @id @default(cuid())
+  campaignId             String
+  normalizedEmail        String // [H] dedup key + immutable snapshot
+  communicationAddressId String? // nav only
+  intendedEmail          String // real chosen destination (audit)
+  state                  CampaignRecipientState @default(PENDING)
+  // claim / recovery
+  attemptCount           Int                    @default(0)
+  firstAttemptAt         DateTime?
+  lastAttemptAt          DateTime?
+  claimedAt              DateTime?
+  providerMessageId      String?
+  failureReason          String?
+  // engagement convenience (derived from events)
+  sentAt                 DateTime?
+  deliveredAt            DateTime?
+  firstOpenedAt          DateTime?
+  firstClickedAt         DateTime?
+  bouncedAt              DateTime?
+  complainedAt           DateTime?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+
+  campaign Campaign                  @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  address  CommunicationAddress?     @relation(fields: [communicationAddressId], references: [id], onDelete: SetNull)
+  sources  CampaignRecipientSource[]
+  events   CampaignEvent[]
+
+  @@unique([campaignId, normalizedEmail]) // <-- prevents double delivery
+  @@index([campaignId])
+  @@index([normalizedEmail])
+  @@index([state])
+}
+
+// Every contributing CRM record — non-null immutable identity
+model CampaignRecipientSource {
+  id               String          @id @default(cuid())
+  recipientId      String
+  sourceBoardId    String // [H] immutable Monday identity
+  sourceItemId     String // [H] immutable Monday identity
+  sourceEntityType CrmBoardKind // [H]
+  emailSourceType  EmailSourceType // [H]
+  sourceEmailRaw   String // [H] exact pre-normalization email
+  companyId        String? // nav only
+  contactId        String? // nav only
+  createdAt        DateTime        @default(now())
+
+  recipient CampaignRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  company   Company?          @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact   Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@unique([recipientId, sourceBoardId, sourceItemId, emailSourceType])
+  @@index([companyId])
+  @@index([contactId])
+  @@index([sourceBoardId, sourceItemId])
+}
+
+// ============================================================================
+// Audience preview / exclusions (NOT delivery — no fake recipient rows)
+// ============================================================================
+model CampaignAudienceSnapshot {
+  id                        String   @id @default(cuid())
+  campaignId                String
+  resolvedAt                DateTime @default(now())
+  matchedRecords            Int
+  withCandidateEmail        Int
+  eligible                  Int
+  uniqueDestinations        Int
+  excluded                  Int
+  duplicateSourcesCollapsed Int // duplicates retained as sources, NOT exclusions
+  breakdown                 Json // counts per ExclusionReason
+  campaign                  Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+}
+
+model CampaignAudienceExclusion {
+  id               String           @id @default(cuid())
+  campaignId       String
+  sourceBoardId    String
+  sourceItemId     String
+  sourceEntityType CrmBoardKind
+  emailSourceType  EmailSourceType?
+  sourceEmailRaw   String?
+  normalizedEmail  String?
+  reason           ExclusionReason
+  createdAt        DateTime         @default(now())
+  campaign         Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([reason])
+}
+
+// ============================================================================
+// Test send — isolated from the production ledger (does NOT fan out)
+// ============================================================================
+model CampaignTestSend {
+  id                       String        @id @default(cuid())
+  campaignId               String
+  requestedById            String
+  fromEmail                String // fahed@axis-gps.com
+  toEmail                  String // khaled-s@axis-gps.com
+  simulatedNormalizedEmail String?
+  simulatedSourceBoardId   String?
+  simulatedSourceItemId    String?
+  subjectSnapshot          String?
+  state                    TestSendState @default(QUEUED)
+  providerMessageId        String?
+  failureReason            String?
+  createdAt                DateTime      @default(now())
+  sentAt                   DateTime?
+  campaign                 Campaign      @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+
+  @@index([campaignId])
+}
+
+// ============================================================================
+// Provider events (append-only)
+// ============================================================================
+model CampaignEvent {
+  id                String            @id @default(cuid())
+  campaignId        String
+  recipientId       String?
+  normalizedEmail   String?
+  type              CampaignEventType
+  providerEventId   String? // idempotency (nullable ok — multiple NULLs allowed)
+  providerMessageId String?
+  occurredAt        DateTime
+  payload           Json?
+  createdAt         DateTime          @default(now())
+
+  campaign  Campaign           @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  recipient CampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@unique([providerEventId])
+  @@index([campaignId])
+  @@index([recipientId])
+  @@index([type])
+}
+
+// ============================================================================
+// Unsubscribe / suppression (email-centric effective state; sync-immune)
+// ============================================================================
+model Unsubscribe {
+  id                     String            @id @default(cuid())
+  normalizedEmail        String // [H] immutable snapshot
+  scope                  UnsubscribeScope  @default(GLOBAL)
+  source                 UnsubscribeSource
+  reason                 String?
+  occurredAt             DateTime          @default(now()) // immutable original fact
+  communicationAddressId String? // nav only
+  campaignId             String?
+  contactId              String?
+  companyId              String?
+  tokenId                String? // opaque token ref (no crypto yet)
+  createdAt              DateTime          @default(now())
+
+  address CommunicationAddress? @relation(fields: [communicationAddressId], references: [id], onDelete: SetNull)
+
+  @@unique([normalizedEmail, scope]) // idempotent effective state
+  @@index([normalizedEmail])
+  @@index([communicationAddressId])
+}
+
+model Suppression {
+  id                     String            @id @default(cuid())
+  normalizedEmail        String // [H]
+  reason                 SuppressionReason
+  occurredAt             DateTime          @default(now())
+  communicationAddressId String? // nav only
+  createdAt              DateTime          @default(now())
+
+  address CommunicationAddress? @relation(fields: [communicationAddressId], references: [id], onDelete: SetNull)
+
+  @@unique([normalizedEmail, reason])
+  @@index([normalizedEmail])
+  @@index([communicationAddressId])
+}
+
+model SuppressionEvent {
+  id              String            @id @default(cuid())
+  normalizedEmail String
+  reason          SuppressionReason
+  source          String
+  providerEventId String? // idempotency
+  occurredAt      DateTime          @default(now())
+  payload         Json?
+  createdAt       DateTime          @default(now())
+
+  @@unique([providerEventId])
+  @@index([normalizedEmail])
+}
+
+// ============================================================================
+// Monday sync machinery
+// ============================================================================
+model MondayBoard {
+  id            String       @id @default(cuid())
+  mondayBoardId String       @unique
+  kind          CrmBoardKind
+  name          String?
+  columnMapping Json?
+  syncCursor    String?
+  lastSyncedAt  DateTime?
+  isActive      Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  syncRuns      SyncRun[]
+}
+
+model SyncRun {
+  id            String        @id @default(cuid())
+  mondayBoardId String
+  trigger       SyncTrigger
+  status        SyncStatus    @default(RUNNING)
+  startedAt     DateTime      @default(now())
+  finishedAt    DateTime?
+  createdCount  Int           @default(0)
+  updatedCount  Int           @default(0)
+  archivedCount Int           @default(0)
+  skippedCount  Int           @default(0)
+  errorCount    Int           @default(0)
+  errorMessage  String?
+  board         MondayBoard   @relation(fields: [mondayBoardId], references: [mondayBoardId], onDelete: Cascade)
+  items         SyncItemLog[]
+
+  @@index([status])
+  @@index([startedAt])
+}
+
+model SyncItemLog {
+  id             String         @id @default(cuid())
+  syncRunId      String
+  mondayItemId   String
+  action         SyncItemAction
+  classification SyncItemClass?
+  message        String?
+  rawItem        Json?
+  createdAt      DateTime       @default(now())
+  run            SyncRun        @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+
+  @@index([syncRunId])
+  @@index([mondayItemId])
+}
+
+model MondayWebhookEvent {
+  id            String    @id @default(cuid())
+  mondayEventId String? // idempotency
+  boardId       String?
+  itemId        String?
+  type          String?
+  payload       Json?
+  receivedAt    DateTime  @default(now())
+  processedAt   DateTime?
+  status        String?
+
+  @@unique([mondayEventId])
+  @@index([itemId])
+}
+
+// ============================================================================
+// Audit trail (append-only, immutable history)
+// ============================================================================
+model AuditLog {
+  id          String      @id @default(cuid())
+  action      AuditAction
+  actorUserId String?
+  entityType  String?
+  entityId    String?
+  fromState   String?
+  toState     String?
+  reason      String?
+  metadata    Json? // no secrets / unnecessary PII
+  occurredAt  DateTime    @default(now())
+
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([occurredAt])
+}

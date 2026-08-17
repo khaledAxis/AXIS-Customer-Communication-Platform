@@ -19,12 +19,15 @@ managers). Optimize for correctness, maintainability, and safety over scale or m
 
 ## Business Context
 
-AXIS sells GPS and mapping hardware/software. Customer records live primarily in **Hashavshevet**
-(the accounting system) and are exported to **Excel/CSV** for import here. Initial scale is small:
-**~500–1,000 contacts**. Imported data is frequently **incomplete** (missing email, phone, language,
+AXIS sells GPS and mapping hardware/software. **CRM master data is maintained in Monday.com — the
+source of truth** (ADR-0007). This platform is a **downstream projection / read model**: it mirrors
+companies and contacts from Monday (via the Monday GraphQL API + webhooks) and never writes CRM state
+back to Monday in v1. **Hashavshevet is upstream of Monday** (Monday is fed from it) and **must not**
+be modeled as a direct source for this platform. Initial scale is small: **~500–2,000 contacts**.
+Mirrored data is frequently **incomplete** (empty Monday columns for email, phone, language,
 industry, product/brand interests). The platform must accept incomplete data without losing it, make
-gaps visible, and let staff enrich records over time — while **never** letting an incomplete or
-unconsented contact receive email by accident.
+gaps visible, and let staff **enrich records in Monday** over time — while **never** letting an
+incomplete, unconsented, or unsubscribed contact receive email by accident.
 
 Future communication types: newsletters, product announcements, firmware/software updates, training
 invitations, webinars, events, technical alerts, promotions, follow-ups. Design the domain to
@@ -45,10 +48,13 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | Auth | **Auth.js (NextAuth v5)** | Credentials for MVP; server-enforced RBAC |
 | Container | **Docker** | For Postgres locally, and app image later |
 | Email | **Provider via HTTP API** (e.g. Resend/Postmark/SES) | Behind an internal interface; **no vendor SDK committed until the sending milestone** |
+| CRM source | **Monday.com** (GraphQL API + webhooks) | **Source of truth** for CRM master data; platform is a **read-only projection** (ADR-0007) via a `CrmSource` port |
+| Send safety | **Send-mode gate** (`TEST` default / `PRODUCTION`) | Server-side safe-send redirect; going live is an explicit admin action (ADR-0008) |
 | Jobs | Deferred | In-process scheduling first; **Redis/BullMQ only when justified** (see ADR-0005) |
 
 **Not yet installed, and must not be added until its milestone has a concrete need:** Prisma,
-Auth.js, any email vendor SDK, Redis, BullMQ, a component library. Adding one early is a defect.
+Auth.js, a Monday API client, any email vendor SDK, Redis, BullMQ, a component library. Adding one
+early is a defect.
 
 ## Repository Structure
 
@@ -59,7 +65,7 @@ Auth.js, any email vendor SDK, Redis, BullMQ, a component library. Adding one ea
 ├── docs/
 │   ├── requirements.md       # Goals, users, functional/non-functional, MVP scope, business rules
 │   ├── architecture.md       # Components, boundaries, data flow, diagrams
-│   ├── development-plan.md    # Milestone plan (M0–M12) with Definition of Done
+│   ├── development-plan.md    # Milestone plan (M0–M13) with Definition of Done
 │   └── decisions/            # Architecture Decision Records (ADRs)
 │       ├── README.md         # ADR process + index
 │       └── NNNN-*.md         # Individual ADRs
@@ -70,7 +76,7 @@ Auth.js, any email vendor SDK, Redis, BullMQ, a component library. Adding one ea
 │   ├── server/               # Server-only: services, data access, integrations, auth
 │   │   ├── services/         # Use-cases / application layer (orchestrate domain + persistence)
 │   │   ├── db/               # Prisma client + repositories (added at DB milestone)
-│   │   └── integrations/     # External adapters (email provider, ingestion) behind interfaces
+│   │   └── integrations/     # External adapters (Monday CRM, email provider, ingestion) behind interfaces
 │   ├── lib/                  # Framework-agnostic shared utilities (validation, formatting)
 │   └── ui/                   # Reusable presentational components (RTL-aware)
 ├── prisma/                   # schema.prisma + migrations (added at DB milestone)
@@ -98,6 +104,9 @@ Directories under `src/` beyond `app/` are created as their milestone arrives; e
    proves the need, recorded in an ADR. Simpler is the default.
 5. **Server Actions / Route Handlers are thin.** They validate input, call a service, map the result
    to a response. No business logic in the route layer.
+6. **CRM is a read-only projection.** Monday.com is the source of truth (ADR-0007); services mirror
+   CRM master data via a `CrmSource` port and must never write CRM state back to Monday in v1, nor
+   let a sync overwrite locally-owned communication state.
 
 ## Domain Rules
 
@@ -131,14 +140,46 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 
 ### Sending safety (guard against accidental mass send)
 
-- **Sending requires an explicit, typed confirmation** including the resolved recipient count.
+- **Send-mode gate (ADR-0008):** the system runs in **`TEST` / SAFE-SEND mode by default**; real
+  customer delivery is **disabled by default**. In `TEST` mode **no email reaches a real CRM
+  address** — every delivery is redirected server-side to the configured safe-send address
+  (`SAFE_SEND_REDIRECT_TO`, default `khaled-s@axis-gps.com`). The **intended recipient is still
+  resolved and logged** (preview + recipient ledger) so segmentation/personalization can be verified.
+- **Switching to `PRODUCTION` send mode is an explicit administrative action** — never automatic
+  (not because tests pass, not because a campaign is approved). The toggle is audited.
+- **Every customer-facing newsletter must include a working, public unsubscribe link** (ADR-0008).
+- **Sending requires an explicit, typed confirmation** including the resolved recipient count; in
+  `TEST` mode the confirmation states recipients are simulated/previewed and mail goes only to the
+  safe-send address.
 - The recipient list is **recomputed at send time** from live eligibility — never a stale snapshot.
-- **A "test send" goes only to explicit test addresses** and never touches the real audience; it is
-  a different code path and cannot fan out to the segment.
 - Dispatch is **idempotent per (campaign, contact)**: a unique send-ledger row prevents double
-  delivery on retry. Re-running a send never re-mails an already-sent recipient.
-- There must be a hard, server-side **environment guard**: non-production environments must not send
-  to real contacts unless explicitly configured.
+  delivery on retry — in **both** `TEST` and `PRODUCTION` modes.
+- All of the above is **enforced server-side**; UI restrictions alone are insufficient. A hard
+  environment guard additionally prevents non-production environments from mailing real contacts.
+
+### Content, newsletters & automation (ADR-0010)
+
+- **Multi-content newsletters:** a campaign composes **many ordered** content items via
+  `CampaignContentItem` (`position`, `isIncluded`, optional heading/intro). The same `ContentItem`
+  cannot be added twice to one campaign (`@@unique([campaignId, contentItemId])`).
+- **Snapshots are authoritative history:** each `CampaignContentItem` and the campaign-level
+  `snapshot*` fields freeze content at approval/send. **Editing a `ContentItem` later never changes
+  sent history** (`CampaignContentItem.contentItem` is `onDelete: Restrict`).
+- **Internal vs external content:** `ContentItem.origin` = `INTERNAL | INGESTED`. External content
+  may be link+title+summary only (`bodyHtml` optional). `ContentSource` holds approved sources
+  (URLs are config, not secrets).
+- **Automatic collection ≠ automatic sending.** Ingested items are created **`PENDING_REVIEW`** and
+  are **not production-usable until `APPROVED`**; a human selects/orders what goes out. External
+  ingestion is idempotent by `(sourceId, externalId)`; no network fetching is implemented yet.
+- **Recurring automation is ASSISTED:** `NewsletterAutomation` (WEEKLY/MONTHLY) **prepares a DRAFT**
+  on schedule; it **never** auto-selects external articles nor auto-sends. One occurrence → at most
+  one campaign (`NewsletterAutomationRun @@unique([automationId, scheduledFor])`).
+- **Scheduled production send is gated** (never silently sends late): approved (four-eyes) + content
+  ready + external content approved + time reached + **production explicitly enabled** + eligibility
+  re-evaluated (unsubscribe/suppression re-checked at send). If unapproved at the scheduled time,
+  **do not send** — the campaign stays attention-required.
+- **Language:** newsletters remain language-specific for delivery; a shared source article may exist
+  as separate HE and AR items. Language `UNKNOWN` is valid for un-reviewed ingested content.
 
 ### Contact consent / eligibility (never email the wrong person)
 
@@ -152,9 +193,11 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 
 - Eligibility is **derived**, never assumed from "the contact row exists". A contact with no email,
   or an invalid one, may exist but is **not** a valid recipient.
-- Unsubscribe and suppression are **append-only** facts. Once suppressed/unsubscribed, a contact is
-  excluded until an explicit, audited re-subscribe (where legally permitted).
-- Unsubscribing must be honored across all campaigns immediately.
+- Unsubscribe and suppression are **append-only**, **locally-owned** facts. Once suppressed/
+  unsubscribed, a contact is excluded until an explicit, audited re-subscribe (where legally
+  permitted). **A Monday CRM sync must never overwrite or remove unsubscribe/suppression state.**
+- Unsubscribing must be honored across all campaigns immediately, via a **public, no-login,
+  tokenized** unsubscribe endpoint (ADR-0008).
 
 ### Segmentation
 
@@ -167,34 +210,76 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 
 ### Language
 
-- Language is an explicit enum: **`HE`, `AR`, `UNKNOWN`**. Missing language is **`UNKNOWN`**, never
-  silently defaulted to Hebrew.
-- A localized campaign targets a language. **Contacts with `UNKNOWN` language are excluded** from a
-  localized send unless an admin explicitly overrides for that campaign. Content and layout must
-  render **RTL** for both Hebrew and Arabic.
+- Language is an explicit enum: **`HE`, `AR`, `UNKNOWN`**, held on **`CommunicationAddress`** (per
+  normalized email), not on the contact. Missing language is **`UNKNOWN`**, never silently Hebrew and
+  never inferred.
+- A localized campaign targets a language. **Destinations whose `CommunicationAddress.language` is
+  `UNKNOWN` are excluded** from a localized send unless an admin overrides for that campaign. Content
+  and layout must render **RTL** for both Hebrew and Arabic.
 
-### Imports (incomplete data is the norm)
+### CRM data ownership & Monday sync (Monday is the source of truth)
 
-- Import is **two-phase**: **PREVIEW** (parse + validate + classify, **zero writes**) then **COMMIT**
-  (idempotent upsert inside a transaction). Nothing is persisted to customer tables during preview.
+- **Monday.com is the source of truth** for CRM master data; this platform is a **read-only
+  projection** (ADR-0007). It mirrors companies/contacts from Monday and **never writes CRM state
+  back to Monday** in v1.
+> **Authoritative data model: [ADR-0009](docs/decisions/0009-communication-address-and-dedup-ledger.md)**
+> (refines ADR-0006/0007 with the real-CRM findings). Key points below.
+
+- **Per-field ownership boundary** — a hard invariant:
+  - **Monday-owned (mirrored, read-only, overwritten by every sync):** company/contact identity and
+    names, `companyEmail`/`accountingEmail`/`email` (raw) + derived `*Norm`, `companyPhone`/`phone`,
+    `jobTitle`, `industry` (Company-level), category, customer status/classification, product links,
+    plus provenance (`mondayBoardId`, `mondayItemId`, `mondayUpdatedAt`, `syncedAt`, `rawItem`, `source`).
+  - **Locally-owned, email-centric on `CommunicationAddress` (one row per `normalizedEmail`) — a sync
+    must NEVER overwrite these:** `emailStatus`, **`language`**, `consentStatus`. (There is **no**
+    Monday language/consent field; both default `UNKNOWN`, never inferred.)
+  - **Locally-owned, other:** `Unsubscribe`, `Suppression`/`SuppressionEvent`, `Campaign`,
+    `CampaignRecipient`, `CampaignRecipientSource`, `CampaignEvent`, `CampaignTestSend`,
+    `CampaignAudienceSnapshot`/`Exclusion`, `AuditLog`, `Segment`, archive flags, send-mode config.
+- **Composite source identity `(mondayBoardId, mondayItemId)`** is the stable natural key for every
+  mirrored record (unique). The local primary key stays a `cuid()`. **Email is never CRM identity**;
+  the globally-unique communication identity is **`CommunicationAddress.normalizedEmail`**.
+- **`Company↔Contact` is many-to-many via `CompanyContact`** (no mandatory `companyId` on `Contact`).
+  **Industry belongs to `Company`**; `Contact` has no industry FK and **no CRM status** column.
+  **Brand/Tag are omitted from v1** (absent in Monday). **Products** = `Product` (catalogue) +
+  `CustomerProduct` (owned/subscriptions), both Monday-mirrored.
+- **Deduplicated delivery:** `CampaignRecipient` is unique on **`(campaignId, normalizedEmail)`** —
+  at most one production delivery per campaign+email; every contributing CRM record is preserved in
+  `CampaignRecipientSource` (non-null identity). **TEST mode never fans out** — test sends live in
+  `CampaignTestSend`; exclusions live in `CampaignAudienceSnapshot`/`Exclusion`, never as fake
+  recipient rows.
+- **Archive-on-delete:** a Monday item deletion **archives** the local projection (`status = ARCHIVED`
+  + `mondayDeletedAt`) and makes it ineligible for sending. **Never hard-delete** a mirrored record,
+  especially when campaign history exists.
+- **Sync freshness:** store `lastSyncedAt` per board/record. For v1, stale data raises a **visible UI
+  warning**; it does **not** auto-block sending.
+
+### CRM synchronization (incomplete data is the norm)
+
+- Sync is **idempotent**: upsert keyed on `(mondayBoardId, mondayItemId)` inside a transaction.
+  Monday **GraphQL API** for pulls + verified **webhooks** for incremental change + a scheduled
+  reconciliation backstop. Sync executions are audited via **`SyncRun`** (one run) and
+  **`SyncItemLog`** (per item); raw webhook events are recorded for idempotency.
 - **Company and contact records support partial/incomplete data.** Optional business metadata is
   **nullable** — do not make it `NOT NULL` without a strong integrity reason.
-- **A row is never discarded solely because optional metadata is missing.** Only rows that violate
-  integrity (unparseable, missing a truly required key) are rejected.
-- The preview **classifies every row** into: `SENDABLE`, `INCOMPLETE`, `NO_EMAIL`, `INVALID_EMAIL`,
-  `DUPLICATE`, `ERROR` (see `docs/requirements.md` for exact definitions).
+- **A record is never skipped solely because optional metadata is missing.** Only items that violate
+  integrity (missing the composite identity, unparseable) are rejected.
+- Each synced item is classified for data quality: `SENDABLE`, `INCOMPLETE`, `NO_EMAIL`,
+  `INVALID_EMAIL`, `CONFLICT`, `ERROR` (see `docs/requirements.md` §8.4). Because **Monday owns record
+  merges**, duplicate/ambiguous identities are **reported as `CONFLICT`**, not merged locally.
 - **Invalid emails are flagged** (`emailStatus = INVALID`) and **excluded from sending**, but the
-  contact is still imported so staff can fix it.
-- **Raw source data is preserved** (the original row + import batch id) for troubleshooting/audit.
-- Import is **idempotent**: re-importing the same source (matched by normalized email, or a
-  `sourceSystem + externalId` reference when available) updates rather than duplicates.
+  contact is still mirrored so staff can fix it in Monday.
+- The **raw Monday item snapshot is preserved** (`rawItem` + `SyncItemLog`) for troubleshooting/audit.
+- **CSV/Excel import is a secondary, optional admin/developer fallback** (bootstrap/backfill) — **not**
+  a normal user workflow. If present it reuses the same classification and idempotent-upsert rules and
+  must never become the primary ingestion path.
 
 > **Required-fields note (validated decision):** At the **persistence layer**, `email`, `language`,
-> and `industry` are **nullable** (so incomplete Hashavshevet data always imports). At the
+> and `industry` are **nullable** (so incomplete Monday CRM data always mirrors in). At the
 > **eligibility/completeness layer**, all three are **required for a contact to be a valid target of
 > a localized, industry-segmented email campaign**: valid email ⇒ *sendable*, known language ⇒
 > *renderable*, known industry ⇒ *segmentable*. This reconciles the brief's data-quality rules with
-> its "required" note. **See ADR-0006 — flagged for business validation.**
+> its "required" note. **See ADR-0006 (origin/dedupe amended by ADR-0007).**
 
 ## Coding Standards
 
@@ -202,9 +287,9 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   and `unknown` + narrowing at boundaries. Export domain types from `domain/`.
 - **No magic strings.** Statuses, roles, languages, email/consent states, row classifications, etc.
   are **enums or `as const` union types** in `domain/`, used everywhere. No stray string literals.
-- **Validation at the boundary.** Validate and parse all external input (form data, CSV rows, API
-  payloads, provider webhooks) into typed domain objects before use. Use one schema library
-  consistently (introduce it when the first real input arrives; record the choice).
+- **Validation at the boundary.** Validate and parse all external input (form data, Monday API
+  payloads/webhooks, provider webhooks, optional CSV rows) into typed domain objects before use. Use
+  one schema library consistently (introduce it when the first real input arrives; record the choice).
 - **Errors:** throw typed domain errors (e.g. `IllegalStateTransitionError`, `NotEligibleError`);
   map to user-facing messages in the route/action layer. Never swallow errors silently.
 - **Services** are the application layer: one use-case per function, transactional where it mutates
@@ -224,9 +309,14 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 - **Authorization:** role-based (`ADMIN`, `MANAGER`), **enforced server-side** in services — not
   merely by hiding UI. Approval/four-eyes and send permissions are checked on the server.
 - **Mass-mail protection** (see Domain Rules → Sending safety) is a security control, not just UX:
-  typed confirmation, live eligibility recompute, idempotent send ledger, environment guard.
-- **Input validation** on every external boundary; treat CSV/Excel and provider webhooks as
-  untrusted. Verify webhook signatures when the provider supports them.
+  the server-side `SEND_MODE` safe-send gate (`TEST` default), typed confirmation, live eligibility
+  recompute, idempotent send ledger, and environment guard. Going to `PRODUCTION` is an explicit,
+  audited admin action — never automatic.
+- **Input validation** on every external boundary; treat **Monday API responses/webhooks**, provider
+  webhooks, and optional CSV/Excel uploads as **untrusted**. Verify webhook signatures (Monday
+  signing secret + challenge handshake; email-provider signatures) before processing.
+- **Public unsubscribe endpoint** must be safe for anonymous recipient use: no login, an unguessable
+  scoped token, no enumerable identifiers, rate-limited.
 - **Least privilege** for DB and provider credentials. Log security-relevant actions (auth,
   approvals, sends) to the audit trail.
 
@@ -234,18 +324,22 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 
 - **Prisma migrations are the only way to change schema.** Never hand-edit the database or use
   `db push` against anything but a throwaway local DB. Commit migrations with the code that needs them.
-- **Integrity in the database, not just the app:** foreign keys, `UNIQUE` constraints (e.g. one
-  active unsubscribe per contact/scope; one send-ledger row per campaign+contact), `CHECK`/enum
-  types, and `NOT NULL` **only** for genuinely required fields.
+- **Integrity in the database, not just the app:** foreign keys, `UNIQUE` constraints (e.g. composite
+  CRM identity `(mondayBoardId, mondayItemId)`; one active unsubscribe per contact/scope; one
+  send-ledger row per campaign+contact), `CHECK`/enum types, and `NOT NULL` **only** for genuinely
+  required fields.
 - **Optional business metadata is nullable** (see Domain/Import rules). Required for integrity ≠
   required by business.
-- **Indexes** on foreign keys and on columns used for segmentation/eligibility filtering and lookups
-  (email, status, language, industry, tag joins).
+- **Indexes** on foreign keys, the composite `(mondayBoardId, mondayItemId)` identity, and columns
+  used for segmentation/eligibility filtering and lookups (email, status, language, industry, tag
+  joins, `lastSyncedAt`).
 - **IDs:** use CUIDs/UUIDs (Prisma default `cuid()`), not exposed auto-increment integers.
 - **Timestamps:** every table has `createdAt` and `updatedAt`. Append-only audit/event tables keep
   their own immutable `occurredAt`.
-- **Transactions** wrap multi-row mutations (import commit, send ledger writes, state transition +
+- **Transactions** wrap multi-row mutations (CRM sync commit, send ledger writes, state transition +
   audit) so they are all-or-nothing.
+- **Sync-immune local state:** `Unsubscribe`, `Suppression`, and the campaign tables are locally
+  owned; the CRM sync writes only mirrored projection fields and must never update or delete them.
 - **Money/enums as domain types**, not free text.
 
 ## UI/UX Rules
@@ -260,16 +354,34 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 - **Destructive or irreversible actions** (send, delete, suppress, approve) require an explicit
   confirmation state that names the consequence and, for sending, the recipient count.
 - **Incomplete data is visible:** the UI must make incomplete contact profiles (missing email,
-  language, industry, etc.) easy to spot and enrich.
+  language, industry, etc.) easy to spot; enrichment happens in Monday (the source of truth).
+- **UI-first operations:** normal users perform **all** operational workflows — CRM sync,
+  segmentation, campaign building, approval, and sending — through the **application UI**.
+  Terminal/CLI commands are for developers/infrastructure only and must never be a required step in a
+  business workflow.
+- **Send-mode indicator:** the UI must clearly show whether the system is in **`TEST MODE`** or
+  **`PRODUCTION SEND MODE`** at all times. In `TEST MODE`, the campaign confirmation must state that
+  recipients are simulated/previewed and the actual email is sent only to the safe-send address
+  (`khaled-s@axis-gps.com`).
+- **Stale-sync warning:** when the local CRM projection is stale (`lastSyncedAt` beyond threshold),
+  show a visible warning; in v1 this warns rather than blocks sending.
 
 ## Testing Expectations
 
 - **Unit** (fast, no I/O): domain logic — the campaign state machine, eligibility rules, segment
-  resolution, import row classification, email validation. These encode the invariants; test them
-  thoroughly including illegal transitions and edge cases (no email, UNKNOWN language, duplicates).
-- **Integration** (with a test Postgres): repositories/services, import commit idempotency, send
-  ledger uniqueness, transactional rollback.
-- **E2E** (later, key flows): login → import preview → build campaign → approve → schedule/test send.
+  resolution, sync-item classification, email validation, and the safe-send address resolver. Test
+  invariants thoroughly, including illegal transitions and edge cases (no email, UNKNOWN language,
+  archived, conflicts).
+- **Integration** (with a test Postgres): repositories/services, CRM sync idempotency, send ledger
+  uniqueness, transactional rollback, and that a sync does **not** overwrite locally-owned state.
+- **E2E** (later, key flows): login → CRM sync → build campaign → approve → test/production send.
+- **Mandatory sending & subscription safety tests (ADR-0008) — must exist before real sends:**
+  - an **unsubscribed contact cannot receive** a campaign;
+  - **unsubscribe persists across CRM synchronization** (a sync never resurrects it);
+  - **`TEST` mode cannot send to a real customer email**;
+  - **`TEST` mode sends only to `khaled-s@axis-gps.com`**;
+  - **switching to `PRODUCTION` mode is explicit** (never automatic);
+  - **duplicate-send protection holds in both `TEST` and `PRODUCTION`** modes.
 - A change to a domain invariant **must** come with tests. Do not claim success while tests fail —
   report failures exactly.
 

@@ -9,7 +9,7 @@
 We need a single, maintainable web application for internal AXIS staff: server-rendered admin UI,
 form-heavy workflows (import, campaign building, approvals), server-side enforcement of business
 rules, and a place to expose a webhook endpoint for the email provider. The team is small and the
-scale is modest (~500–1,000 contacts). The brief proposes Next.js + TypeScript.
+scale is modest (~500–2,000 contacts). The brief proposes Next.js + TypeScript.
 
 ## Decision
 

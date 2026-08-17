@@ -9,7 +9,7 @@
 Scheduling and sending eventually need background execution: a due-campaign trigger and iteration over
 recipients. The brief lists a "worker/job queue architecture **when** scheduling/email sending
 requires it" and "Redis/BullMQ **only when justified** rather than added prematurely." Current scale
-is small (~500–1,000 contacts, low campaign frequency), so a single campaign send is a few hundred
+is small (~500–2,000 contacts, low campaign frequency), so a single campaign send is a few hundred
 provider calls — not obviously beyond what a single process can do.
 
 ## Decision

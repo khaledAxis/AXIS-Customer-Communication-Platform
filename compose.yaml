@@ -1,0 +1,37 @@
+# Local DEVELOPMENT PostgreSQL for the AXIS Customer Communication Platform.
+#
+# Developer infrastructure ONLY — this is NOT part of the final, non-technical
+# AXIS user workflow. Normal users never touch Docker/Prisma/psql.
+#
+# Usage (once Docker is installed):
+#   docker compose up -d
+#   # then add to .env.local (git-ignored):
+#   #   DATABASE_URL="postgresql://axis:axis_dev_password@localhost:5432/axis_ccp_dev?schema=public"
+#   npm run db:deploy     # applies prisma/migrations to the dev DB
+#   npm test              # runs unit + (now-unblocked) integration tests
+#
+# PostgreSQL only. Do NOT point DATABASE_URL at any production/customer database.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: axis-ccp-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: axis
+      # LOCAL DEV ONLY — not a production secret. Override via POSTGRES_PASSWORD env if desired.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-axis_dev_password}
+      POSTGRES_DB: axis_ccp_dev
+    ports:
+      # localhost-only exposure (not reachable from the network)
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - axis_ccp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U axis -d axis_ccp_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  axis_ccp_pgdata:
+    name: axis_ccp_pgdata
