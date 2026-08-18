@@ -146,3 +146,5 @@ node_modules/
 tsconfig.tsbuildinfo
 .env.local
 .env.example
+# Local development media uploads (never committed; replaced by object storage in production)
+var/

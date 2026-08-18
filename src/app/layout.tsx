@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 
+import { AppShell } from "../ui/AppShell";
+
 /**
  * Root layout for the AXIS internal admin application.
  *
@@ -20,8 +22,8 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" dir="ltr" className="h-full antialiased">
-      <body className="min-h-full flex flex-col bg-background text-foreground">
-        {children}
+      <body className="min-h-full bg-slate-50 text-slate-900">
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

@@ -47,9 +47,13 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | ORM | **Prisma** | All schema changes via migrations — **no manual DDL** |
 | Auth | **Auth.js (NextAuth v5)** | Credentials for MVP; server-enforced RBAC |
 | Container | **Docker** | For Postgres locally, and app image later |
-| Email | **Provider via HTTP API** (e.g. Resend/Postmark/SES) | Behind an internal interface; **no vendor SDK committed until the sending milestone** |
+| Email (TEST) | **Microsoft Graph** app-only via `@azure/msal-node` | `POST /users/{sender}/sendMail`; behind the `EmailProvider` port (ADR-0013) |
+| Email (bulk, later) | **Provider via HTTP API** (e.g. Resend/Postmark/SES) | Behind the same port; **no bulk vendor SDK committed yet** |
 | CRM source | **Monday.com** (GraphQL API + webhooks) | **Source of truth** for CRM master data; platform is a **read-only projection** (ADR-0007) via a `CrmSource` port |
 | Send safety | **Send-mode gate** (`TEST` default / `PRODUCTION`) | Server-side safe-send redirect; going live is an explicit admin action (ADR-0008) |
+| Email HTML | **One canonical renderer** in `domain/email` | Table-based + inline styles; preview and sender share it (ADR-0011). No email-template library |
+| Rich text | **Restricted markup rendered server-side** | No stored client HTML; XSS-safe by construction. No WYSIWYG dependency (ADR-0012) |
+| Media | **`MediaStore` port**; local disk in dev | Images in git-ignored `var/media/`, never in `public/`, never in PostgreSQL (ADR-0012) |
 | Jobs | Deferred | In-process scheduling first; **Redis/BullMQ only when justified** (see ADR-0005) |
 
 **Not yet installed, and must not be added until its milestone has a concrete need:** Prisma,
@@ -76,10 +80,12 @@ early is a defect.
 │   ├── server/               # Server-only: services, data access, integrations, auth
 │   │   ├── services/         # Use-cases / application layer (orchestrate domain + persistence)
 │   │   ├── db/               # Prisma client + repositories (added at DB milestone)
+│   │   ├── media/            # MediaStore port + local-disk implementation (dev)
 │   │   └── integrations/     # External adapters (Monday CRM, email provider, ingestion) behind interfaces
 │   ├── lib/                  # Framework-agnostic shared utilities (validation, formatting)
 │   └── ui/                   # Reusable presentational components (RTL-aware)
 ├── prisma/                   # schema.prisma + migrations (added at DB milestone)
+├── var/media/                # Local DEV image uploads — git-ignored, replaced by object storage
 ├── .env.example              # Documented env vars — no secrets, committed
 └── eslint.config.mjs, tsconfig.json, next.config.ts, postcss.config.mjs
 ```
@@ -180,6 +186,52 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
   **do not send** — the campaign stays attention-required.
 - **Language:** newsletters remain language-specific for delivery; a shared source article may exist
   as separate HE and AR items. Language `UNKNOWN` is valid for un-reviewed ingested content.
+
+### Newsletter rendering & authoring (ADR-0011 / ADR-0012)
+
+- **One rendering path.** `renderNewsletterHtml` in `domain/email/newsletterTemplate.ts` is the **only**
+  email HTML generator. The browser preview and any future provider adapter call it with the same
+  document, so **what is previewed is what would be sent**. A second "preview-only" layout is a defect.
+- The renderer is **pure and deterministic** (same input ⇒ byte-identical output), uses **table layout
+  + inline styles**, and sets **real `dir` semantics** for HE/AR — not just `text-align`. `UNKNOWN`
+  language stays LTR. Tailwind classes must never be relied on inside email HTML.
+- **Client-supplied HTML is never stored or emitted.** Authors write a restricted markup; the server
+  escapes it and emits only tags it generates itself, so XSS-safety is structural, not sanitizer-based.
+  Link schemes are limited to `http`/`https`/`mailto`.
+- **Images:** type allow-list + magic-byte sniffing + size cap; **SVG rejected**; the client filename
+  never reaches disk (a storage name is generated); files live outside `public/` and are served by a
+  handler that pins the content type and sends `nosniff`. Access goes through the **`MediaStore` port**.
+- **The test-send surface is non-editable.** Sender `fahed@axis-gps.com` and recipient
+  `khaled-s@axis-gps.com` are hard-coded constants rendered as read-only text (the panel has **no input
+  element**), and any other recipient is rejected server-side. Preview itself creates **no** recipient,
+  test-send, or event rows and makes no network call.
+
+### SAFE TEST sending via Microsoft Graph (ADR-0013)
+
+- **The audience is unrepresentable, not merely validated.** `TestEmailMessage` has **no `from`,
+  `cc`, `bcc` or `replyTo`**, and `to` is a single string. The sender is adapter configuration.
+  `assertSafeTestEnvelope` re-validates in the service **and** again inside the adapter, refusing
+  (never trimming) any attempt to widen the audience.
+- **Approval is bound to a SHA-256 of the exact rendered message** (campaign, mode, sender, recipient,
+  subject, preheader, ordered content, HTML, text). At send time the newsletter is **re-rendered and
+  re-hashed**; any difference blocks the send with *"Newsletter changed after approval…"*. A
+  client-supplied `approved=true` is never trusted. Preview and send share `previewDocument`, so the
+  reviewed and hashed messages are byte-identical.
+- **One approval ⇒ at most one submission**, enforced by a **UNIQUE** `CampaignTestSend.approvalId`.
+  The attempt row is written *before* the provider call, so a concurrent/double-clicked request loses
+  at the database and never reaches Microsoft. Approving again revokes the previous unused approval.
+- **`202` means accepted, never delivered.** Say "Microsoft 365 accepted the test email for delivery".
+  A timeout/unreadable response is `UNCERTAIN` and is **never auto-retried** — that could duplicate
+  real mail; a human checks Sent Items.
+- **Test sends never touch production ledgers** — only `CampaignTestSend`. No audience resolution, no
+  fan-out, `CampaignRecipient`/`CampaignEvent` untouched.
+- **Configuration is validated for shape, not just presence**, so a placeholder reports
+  *"Microsoft email provider is not configured"* instead of failing opaquely at send time. The
+  capability check never calls Graph.
+- **Never** log or persist tokens, secrets, or `Authorization` headers. A mailbox password must never
+  be requested or stored. Tenant `Mail.Send` is **tenant-wide by default** — scope it with Exchange
+  RBAC (`docs/microsoft-graph-setup.md`), and treat tenant config as untrusted: the app-level guards
+  are mandatory regardless.
 
 ### Contact consent / eligibility (never email the wrong person)
 

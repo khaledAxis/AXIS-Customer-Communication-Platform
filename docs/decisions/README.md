@@ -44,6 +44,9 @@ default awaiting confirmation from stakeholders.
 | [0008](0008-test-safe-send-mode-and-unsubscribe.md) | Test/Safe-send mode & locally-owned, sync-immune unsubscribe | Accepted |
 | [0009](0009-communication-address-and-dedup-ledger.md) | CommunicationAddress, deduplicated delivery ledger & test-send isolation | Accepted — **authoritative for the data model** |
 | [0010](0010-newsletter-automation-and-content.md) | Recurring newsletter automation, multi-content composition & reviewed external content | Accepted |
+| [0011](0011-canonical-email-rendering.md) | One canonical newsletter rendering path (preview = sent HTML) | Accepted |
+| [0012](0012-authoring-media-and-safe-test-send-ui.md) | Content authoring, image storage & the SAFE test-send surface | Accepted |
+| [0013](0013-microsoft-graph-safe-test-send.md) | Microsoft Graph SAFE TEST sending with explicit, hash-bound approval | Accepted |
 
 ---
 
