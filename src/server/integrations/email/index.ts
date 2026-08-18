@@ -1,5 +1,5 @@
 import type { EmailProvider } from "./emailProvider";
-import { MicrosoftGraphEmailProvider } from "./microsoftGraphEmailProvider";
+import { GmailSmtpEmailProvider } from "./gmailSmtpEmailProvider";
 
 /**
  * The single place that decides which EmailProvider implementation is used.
@@ -11,13 +11,13 @@ let singleton: EmailProvider | undefined;
 
 export function getEmailProvider(): EmailProvider {
   if (override) return override;
-  if (!singleton) singleton = new MicrosoftGraphEmailProvider();
+  if (!singleton) singleton = new GmailSmtpEmailProvider();
   return singleton;
 }
 
 /**
  * Test seam. Injecting a fake keeps the suite entirely offline — no test can reach
- * Microsoft Graph even by accident.
+ * Gmail SMTP even by accident.
  */
 export function setEmailProviderForTesting(provider: EmailProvider | undefined): void {
   override = provider;

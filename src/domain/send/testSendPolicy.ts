@@ -15,7 +15,7 @@
 import type { SafeSendConfig } from "./safeSend";
 
 /** The ONLY address permitted to appear as the sender of a test email. */
-export const AUTHORIZED_TEST_SENDER = "fahed@axis-gps.com" as const;
+export const AUTHORIZED_TEST_SENDER = "axisgpscana@gmail.com" as const;
 
 /** The ONLY address permitted to receive a test email. */
 export const AUTHORIZED_TEST_RECIPIENT = "khaled-s@axis-gps.com" as const;
@@ -38,16 +38,33 @@ export class UnauthorizedTestRecipientError extends Error {
   }
 }
 
+/**
+ * Any control character in an address or header value can forge extra SMTP headers
+ * (a smuggled Bcc: line, for example). Such values are refused, never sanitized.
+ *
+ * Written as a code-point scan rather than a regex so the check is unambiguous.
+ */
+export function hasHeaderInjection(value: string | null | undefined): boolean {
+  if (typeof value !== "string") return false;
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
 function normalize(address: string): string {
   return address.trim().toLowerCase();
 }
 
 export function isAuthorizedTestRecipient(address: string | null | undefined): boolean {
-  return !!address && normalize(address) === AUTHORIZED_TEST_RECIPIENT;
+  if (!address || hasHeaderInjection(address)) return false;
+  return normalize(address) === AUTHORIZED_TEST_RECIPIENT;
 }
 
 export function isAuthorizedTestSender(address: string | null | undefined): boolean {
-  return !!address && normalize(address) === AUTHORIZED_TEST_SENDER;
+  if (!address || hasHeaderInjection(address)) return false;
+  return normalize(address) === AUTHORIZED_TEST_SENDER;
 }
 
 /**

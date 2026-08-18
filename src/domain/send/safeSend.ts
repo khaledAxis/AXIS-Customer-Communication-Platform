@@ -14,7 +14,7 @@ export type SendMode = "TEST" | "PRODUCTION";
 
 export interface SafeSendConfig {
   mode: SendMode;
-  safeFrom: string; // e.g. fahed@axis-gps.com
+  safeFrom: string; // e.g. axisgpscana@gmail.com
   safeRedirectTo: string; // e.g. khaled-s@axis-gps.com
   productionFrom?: string; // real sender used only in PRODUCTION (defaults to safeFrom)
 }

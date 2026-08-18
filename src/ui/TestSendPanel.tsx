@@ -84,7 +84,7 @@ export function TestSendPanel(props: TestSendPanelProps) {
       {!props.providerConfigured ? (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
           <p className="text-sm font-semibold text-amber-900">
-            Microsoft email provider is not configured
+            Gmail test email provider is not configured
           </p>
           {props.providerProblems.length > 0 ? (
             <ul className="mt-2 list-disc space-y-1 ps-5 text-xs text-amber-900">

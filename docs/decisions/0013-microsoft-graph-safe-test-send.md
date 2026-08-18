@@ -1,6 +1,6 @@
 # ADR-0013: Microsoft Graph SAFE TEST sending with explicit, hash-bound approval
 
-- **Status:** Accepted
+- **Status:** Accepted — **transport superseded by [ADR-0014](0014-gmail-smtp-safe-test-send.md)** (Gmail SMTP). The approval model, single-use idempotency, uncertainty handling and ledger separation below remain authoritative; only the Microsoft Graph adapter and the `fahed@axis-gps.com` sender are replaced.
 - **Date:** 2026-08-17
 - **Deciders:** Administrator/developer (architect)
 - **Relates to:** realises the `EmailProvider` port of ADR-0004; extends ADR-0008 (send-mode gate) and ADR-0012 (test-send surface); consumes ADR-0011 (canonical rendering).

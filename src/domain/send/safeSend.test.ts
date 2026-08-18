@@ -3,7 +3,7 @@ import { resolveDelivery, defaultSendMode, SafeSendConfig } from "./safeSend";
 
 const cfg = (mode: "TEST" | "PRODUCTION"): SafeSendConfig => ({
   mode,
-  safeFrom: "fahed@axis-gps.com",
+  safeFrom: "axisgpscana@gmail.com",
   safeRedirectTo: "khaled-s@axis-gps.com",
 });
 
@@ -15,7 +15,7 @@ describe("safe-send resolver", () => {
   it("in TEST, a real CRM address is never the provider destination", () => {
     const d = resolveDelivery("real.customer@bigco.com", cfg("TEST"));
     expect(d.toEmail).toBe("khaled-s@axis-gps.com");
-    expect(d.fromEmail).toBe("fahed@axis-gps.com");
+    expect(d.fromEmail).toBe("axisgpscana@gmail.com");
     expect(d.intendedEmail).toBe("real.customer@bigco.com");
     expect(d.isRedirected).toBe(true);
   });

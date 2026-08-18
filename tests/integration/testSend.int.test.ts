@@ -11,7 +11,7 @@ import * as testSendService from "../../src/server/services/testSendService";
 /**
  * SAFE TEST send workflow against real PostgreSQL, with a FAKE provider.
  *
- * No test can reach Microsoft Graph: the provider is replaced for the whole suite and
+ * No test can reach Gmail SMTP: the provider is replaced for the whole suite and
  * restored afterwards. These tests cover the approval hash, single use, DB-enforced
  * idempotency, and that production ledgers stay untouched.
  *
@@ -101,7 +101,7 @@ d("SAFE TEST send", () => {
     const status = await testSendService.getTestSendStatus(campaignId);
     expect(status!.providerConfigured).toBe(false);
     expect(status!.canSend).toBe(false);
-    expect(status!.message).toBe("Microsoft email provider is not configured");
+    expect(status!.message).toBe("Gmail test email provider is not configured");
   });
 
   it("still allows approving while the provider is unconfigured", async () => {
@@ -162,7 +162,7 @@ d("SAFE TEST send", () => {
     const approval = await prisma.campaignTestApproval.findFirst({ where: { campaignId } });
 
     expect(approval!.contentHash).toBe(rendered!.contentHash);
-    expect(approval!.fromEmail).toBe("fahed@axis-gps.com");
+    expect(approval!.fromEmail).toBe("axisgpscana@gmail.com");
     expect(approval!.toEmail).toBe("khaled-s@axis-gps.com");
     expect(approval!.sendMode).toBe("TEST");
   });
@@ -373,10 +373,10 @@ d("SAFE TEST send", () => {
 
     const attempt = await prisma.campaignTestSend.findFirst({ where: { campaignId } });
     expect(attempt!.state).toBe("ACCEPTED");
-    expect(attempt!.provider).toBe("MICROSOFT_GRAPH");
-    expect(attempt!.fromEmail).toBe("fahed@axis-gps.com");
+    expect(attempt!.provider).toBe("GMAIL_SMTP");
+    expect(attempt!.fromEmail).toBe("axisgpscana@gmail.com");
     expect(attempt!.toEmail).toBe("khaled-s@axis-gps.com");
-    expect(attempt!.providerStatusCode).toBe(202);
+    expect(attempt!.providerStatusCode).toBe(250);
     expect(attempt!.acceptedAt).not.toBeNull();
     expect(attempt!.idempotencyKey).not.toBeNull();
     expect(attempt!.approvalId).not.toBeNull();
@@ -388,9 +388,9 @@ d("SAFE TEST send", () => {
       new FakeEmailProvider({
         result: {
           outcome: "FAILED",
-          statusCode: 403,
-          failureCode: "GRAPH_FORBIDDEN",
-          message: "Microsoft refused the send.",
+          statusCode: 550,
+          failureCode: "SMTP_ADDRESS_REJECTED",
+          message: "Gmail refused the send.",
         },
       }),
     );
@@ -402,7 +402,7 @@ d("SAFE TEST send", () => {
 
     const attempt = await prisma.campaignTestSend.findFirst({ where: { campaignId } });
     expect(attempt!.state).toBe("FAILED");
-    expect(attempt!.failureCode).toBe("GRAPH_FORBIDDEN");
+    expect(attempt!.failureCode).toBe("SMTP_ADDRESS_REJECTED");
     expect(attempt!.acceptedAt).toBeNull();
   });
 
@@ -411,7 +411,7 @@ d("SAFE TEST send", () => {
       new FakeEmailProvider({
         result: {
           outcome: "UNCERTAIN",
-          failureCode: "NETWORK_OR_TIMEOUT",
+          failureCode: "SMTP_CONNECTION_LOST",
           message: "Connection failed before a reply arrived.",
         },
       }),
@@ -426,7 +426,7 @@ d("SAFE TEST send", () => {
     const attempt = await prisma.campaignTestSend.findFirst({ where: { campaignId } });
     expect(attempt!.state).toBe("UNCERTAIN");
 
-    // The approval stays consumed: re-sending could duplicate a message Microsoft
+    // The approval stays consumed: re-sending could duplicate a message Gmail
     // may already have accepted.
     const retry = await testSendService.sendApprovedTestEmail(campaignId);
     expect(retry.ok).toBe(false);
@@ -496,7 +496,7 @@ d("SAFE TEST send", () => {
     expect(preview!.document.subject.match(/\[AXIS TEST\]/g)).toHaveLength(1);
   });
 
-  it("reports local-only images so nobody expects them in Outlook", async () => {
+  it("counts pictures that will be OMITTED because they are only local", async () => {
     install(new FakeEmailProvider());
     const { campaignId } = await newSendableNewsletter();
     const campaign = await newsletterService.getNewsletter(campaignId);
@@ -508,6 +508,12 @@ d("SAFE TEST send", () => {
     });
 
     const status = await testSendService.getTestSendStatus(campaignId);
-    expect(status!.hasLocalOnlyImages).toBe(true);
+    // The renderer drops them entirely, so the email can never show a broken image.
+    expect(status!.omittedImageCount).toBe(1);
+    const rendered = await testSendService.renderTestEmail(campaignId);
+    expect(rendered!.html).not.toMatch(/localhost|127.0.0.1/);
+    // The ARTICLE image is dropped. A header logo <img> may legitimately be present,
+    // so assert on the article's own media path rather than on <img> generally.
+    expect(rendered!.html).not.toContain("/api/media/");
   });
 });

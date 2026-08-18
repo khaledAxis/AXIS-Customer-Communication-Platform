@@ -21,7 +21,7 @@ import {
 } from "../../domain/send/testSendPolicy";
 import * as repo from "../db/repositories/campaignRepository";
 import { getPrisma } from "../db/prisma";
-import { getNewsletterBrand } from "./brandConfig";
+import { getNewsletterBrand, getViewInBrowserUrl } from "./brandConfig";
 
 /**
  * Newsletter use-cases (application layer).
@@ -231,6 +231,7 @@ export function buildNewsletterDocument(campaign: CampaignWithContent): Newslett
     language: campaign.language,
     items,
     brand: getNewsletterBrand(),
+    viewInBrowserUrl: getViewInBrowserUrl(),
     // Not yet functional — the tokenized public endpoint arrives with sending (ADR-0008).
     unsubscribeUrl: null,
     isTestMode: campaign.sendMode === "TEST",

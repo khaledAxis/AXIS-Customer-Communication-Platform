@@ -12,13 +12,17 @@ import {
   assertAuthorizedTestSender,
   assertSafeTestEnvelope,
 } from "../../domain/send/testSendPolicy";
-import { renderNewsletterHtml, renderNewsletterText } from "../../domain/email/newsletterTemplate";
+import {
+  deliverableImageUrl,
+  renderNewsletterHtml,
+  renderNewsletterText,
+} from "../../domain/email/newsletterTemplate";
 import { getPrisma } from "../db/prisma";
 import { getEmailProvider } from "../integrations/email";
 import { getAuthoringUserId, getNewsletter, previewDocument } from "./newsletterService";
 
 /**
- * SAFE TEST send use-cases (ADR-0013).
+ * SAFE TEST send use-cases (ADR-0013, provider switched to Gmail SMTP by ADR-0014).
  *
  * Two separate human actions: approve, then send. The approval is bound to a hash of
  * the exact rendered message and is single-use. At send time the newsletter is
@@ -44,8 +48,8 @@ export interface RenderedTestEmail {
   toEmail: string;
   sendMode: string;
   contentHash: string;
-  /** True when an image would not load outside this machine (localhost URL). */
-  hasLocalOnlyImages: boolean;
+  /** Count of pictures OMITTED because their URL is not reachable outside this machine. */
+  omittedImageCount: number;
 }
 
 type CampaignWithContent = NonNullable<Awaited<ReturnType<typeof getNewsletter>>>;
@@ -75,10 +79,20 @@ function renderFor(campaign: CampaignWithContent): RenderedTestEmail {
     sendMode: campaign.sendMode,
   };
 
+  // Images that cannot resolve outside this machine are omitted by the renderer, so
+  // count them from the source items rather than from the (already stripped) HTML.
+  const omittedImageCount = campaign.contentLinks.filter(
+    (link) =>
+      link.isIncluded &&
+      link.contentItem.imageUrl != null &&
+      link.contentItem.imageUrl.trim() !== "" &&
+      deliverableImageUrl(link.contentItem.imageUrl, document.brand.baseUrl) === null,
+  ).length;
+
   return {
     ...base,
     contentHash: computeApprovalHash(base),
-    hasLocalOnlyImages: /https?:\/\/(localhost|127\.0\.0\.1)/i.test(html),
+    omittedImageCount,
   };
 }
 
@@ -103,7 +117,7 @@ export interface TestSendStatus {
   toEmail: string;
   subject: string;
   sendMode: string;
-  hasLocalOnlyImages: boolean;
+  omittedImageCount: number;
   approval: {
     id: string;
     approvedAt: Date;
@@ -172,7 +186,7 @@ export async function getTestSendStatus(campaignId: string): Promise<TestSendSta
   } else if (!hasContent) {
     message = "Add at least one article before sending a test email.";
   } else if (!configuration.configured) {
-    message = "Microsoft email provider is not configured";
+    message = "Gmail test email provider is not configured";
   } else if (!check.valid) {
     message = APPROVAL_REJECTION_MESSAGE[check.reason ?? "NO_APPROVAL"];
   } else {
@@ -189,7 +203,7 @@ export async function getTestSendStatus(campaignId: string): Promise<TestSendSta
     toEmail: rendered.toEmail,
     subject: rendered.subject,
     sendMode: campaign.sendMode,
-    hasLocalOnlyImages: rendered.hasLocalOnlyImages,
+    omittedImageCount: rendered.omittedImageCount,
     approval: approval
       ? {
           id: approval.id,
@@ -335,7 +349,7 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
     return {
       ok: false,
       reason: "NOT_CONFIGURED",
-      message: "Microsoft email provider is not configured",
+      message: "Gmail test email provider is not configured",
     };
   }
 
@@ -348,7 +362,7 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
 
   // ---- Claim the approval and write the durable attempt BEFORE calling the provider.
   // `CampaignTestSend.approvalId` is UNIQUE, so a concurrent or double-clicked request
-  // loses this race at the database and never reaches Microsoft.
+  // loses this race at the database and never reaches Gmail.
   let testSendId: string;
   try {
     testSendId = await prisma.$transaction(async (tx) => {
@@ -370,7 +384,7 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
           toEmail,
           subjectSnapshot: rendered.subject,
           contentHash: rendered.contentHash,
-          provider: "MICROSOFT_GRAPH",
+          provider: "GMAIL_SMTP",
           state: "SENDING",
           attemptedAt: new Date(),
         },
@@ -432,25 +446,25 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
     return {
       ok: true,
       state,
-      message: result.message ?? "Microsoft 365 accepted the test email for delivery.",
+      message: result.message ?? "Gmail accepted the test email for delivery.",
     };
   }
 
   if (result.outcome === "UNCERTAIN") {
     // Deliberately NOT retried and the approval stays consumed: re-submitting could
-    // duplicate a message Microsoft may already have accepted.
+    // duplicate a message Gmail may already have accepted.
     return {
       ok: false,
       reason: "UNCERTAIN",
       message:
         result.message ??
-        "We could not confirm whether Microsoft accepted the email. Check the sender's Sent Items before approving another test.",
+        "We could not confirm whether Gmail accepted the email. Check the Sent folder before approving another test.",
     };
   }
 
   return {
     ok: false,
     reason: result.failureCode ?? "PROVIDER_FAILED",
-    message: result.message ?? "Microsoft could not accept the email.",
+    message: result.message ?? "Gmail could not accept the email.",
   };
 }

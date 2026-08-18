@@ -101,6 +101,8 @@ enum TestSendState {
 }
 
 enum EmailProviderKind {
+  GMAIL_SMTP
+  // Retained only so historical rows stay readable; no longer selectable (ADR-0014).
   MICROSOFT_GRAPH
   FAKE
 }
@@ -792,7 +794,7 @@ model CampaignTestSend {
   id                       String             @id @default(cuid())
   campaignId               String
   requestedById            String
-  fromEmail                String // fahed@axis-gps.com
+  fromEmail                String // axisgpscana@gmail.com (ADR-0014)
   toEmail                  String // khaled-s@axis-gps.com
   simulatedNormalizedEmail String?
   simulatedSourceBoardId   String?

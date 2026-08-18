@@ -46,7 +46,10 @@ default awaiting confirmation from stakeholders.
 | [0010](0010-newsletter-automation-and-content.md) | Recurring newsletter automation, multi-content composition & reviewed external content | Accepted |
 | [0011](0011-canonical-email-rendering.md) | One canonical newsletter rendering path (preview = sent HTML) | Accepted |
 | [0012](0012-authoring-media-and-safe-test-send-ui.md) | Content authoring, image storage & the SAFE test-send surface | Accepted |
-| [0013](0013-microsoft-graph-safe-test-send.md) | Microsoft Graph SAFE TEST sending with explicit, hash-bound approval | Accepted |
+| [0013](0013-microsoft-graph-safe-test-send.md) | Microsoft Graph SAFE TEST sending with explicit, hash-bound approval | Accepted — **transport superseded by ADR-0014** (approval model still authoritative) |
+| [0014](0014-gmail-smtp-safe-test-send.md) | Gmail SMTP as the SAFE TEST transport | Accepted |
+| [0015](0015-newsletter-visual-redesign.md) | Editorial newsletter layout, bidi isolation & omission of non-deliverable images | Accepted |
+| [0016](0016-cloudinary-image-hosting.md) | Cloudinary as the newsletter image store | Accepted |
 
 ---
 

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 
 import { MAX_IMAGE_BYTES } from "../domain/media/imagePolicy";
+import { isDeliverableImageUrl } from "../domain/email/newsletterTemplate";
 
 /**
  * Friendly image picker.
@@ -26,6 +27,10 @@ export function ImageUploader({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // An app-relative or localhost URL can never be loaded by an email recipient — the
+  // renderer omits it. Say so plainly rather than letting someone discover it after sending.
+  const isEmailReady = isDeliverableImageUrl(url);
 
   const upload = async (file: File) => {
     setError(null);
@@ -62,6 +67,13 @@ export function ImageUploader({
             className="h-28 w-40 rounded-lg border border-slate-200 object-cover"
           />
           <div className="flex flex-col gap-2">
+            {!isEmailReady ? (
+              <p className="max-w-[16rem] rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-900">
+                Local image — replace to make it available in email
+              </p>
+            ) : (
+              <p className="text-xs font-semibold text-emerald-700">Ready for email</p>
+            )}
             <button
               type="button"
               onClick={() => inputRef.current?.click()}

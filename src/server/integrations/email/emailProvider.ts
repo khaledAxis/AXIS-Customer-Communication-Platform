@@ -1,8 +1,8 @@
 /**
  * EmailProvider port (ADR-0004, realised for the SAFE TEST milestone by ADR-0013).
  *
- * Services depend only on this interface; exactly one adapter knows about Microsoft
- * Graph. Note what the message type deliberately does NOT contain:
+ * Services depend only on this interface; exactly one adapter knows about the transport
+ * (Gmail SMTP). Note what the message type deliberately does NOT contain:
  *
  *   - no `from`  — the sender is adapter configuration, so no caller can choose it
  *   - no `cc` / `bcc` / `replyTo` — there is no field with which to widen the audience
@@ -12,7 +12,7 @@
  * runtime guard runs.
  */
 
-export type EmailProviderName = "MICROSOFT_GRAPH" | "FAKE";
+export type EmailProviderName = "GMAIL_SMTP" | "FAKE";
 
 export interface TestEmailMessage {
   /** Single recipient. Re-validated inside the adapter against the authorized address. */
@@ -25,7 +25,7 @@ export interface TestEmailMessage {
 }
 
 /**
- * ACCEPTED  — provider took responsibility for delivery (Graph 202). NOT delivery.
+ * ACCEPTED  — provider took responsibility for delivery (SMTP 250). NOT delivery.
  * FAILED    — provider definitively refused; safe to retry after fixing the cause.
  * UNCERTAIN — we do not know whether it was accepted (timeout / unreadable response).
  *             MUST NOT be auto-retried: that could duplicate a real email.
@@ -34,7 +34,7 @@ export type ProviderOutcome = "ACCEPTED" | "FAILED" | "UNCERTAIN";
 
 export interface ProviderSendResult {
   outcome: ProviderOutcome;
-  /** HTTP status when one was received (202, 401, 403, 429, 5xx…). */
+  /** Protocol status when one was received (SMTP 250, 535, 550…). */
   statusCode?: number;
   providerMessageId?: string;
   /** Short sanitized classification — never a token, secret, or raw header. */

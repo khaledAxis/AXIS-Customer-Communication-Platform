@@ -8,7 +8,13 @@ import {
   isValidStoredFilename,
   type AllowedImageMime,
 } from "../../domain/media/imagePolicy";
-import { mediaUrlFor, type MediaStore, type PutMediaInput, type StoredMedia } from "./mediaStore";
+import {
+  mediaUrlFor,
+  type MediaConfigStatus,
+  type MediaStore,
+  type PutMediaInput,
+  type StoredMedia,
+} from "./mediaStore";
 
 /**
  * LOCAL DEVELOPMENT media store — writes to a git-ignored directory outside `public/`.
@@ -44,6 +50,20 @@ function mimeForExtension(filename: string): string {
 }
 
 export class LocalMediaStore implements MediaStore {
+  readonly provider = "LOCAL" as const;
+
+  /**
+   * Always "configured" — it is the filesystem. The message is deliberately honest:
+   * images stored here cannot be loaded by an email recipient.
+   */
+  checkConfiguration(): MediaConfigStatus {
+    return {
+      configured: true,
+      problems: [],
+      message: "Local development image storage (pictures will not appear in email)",
+    };
+  }
+
   async put(input: PutMediaInput): Promise<StoredMedia> {
     const extension = ALLOWED_IMAGE_TYPES[input.mimeType as AllowedImageMime];
     if (!extension) throw new Error("Unsupported media type.");
@@ -86,14 +106,6 @@ export class LocalMediaStore implements MediaStore {
       // Already gone (or never valid) — removal is idempotent.
     }
   }
-}
-
-let store: MediaStore | undefined;
-
-/** Factory — the single place that decides which MediaStore implementation is used. */
-export function getMediaStore(): MediaStore {
-  if (!store) store = new LocalMediaStore();
-  return store;
 }
 
 export { MEDIA_ROOT };

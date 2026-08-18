@@ -18,7 +18,7 @@ const matter = (overrides: Partial<ApprovalSubjectMatter> = {}): ApprovalSubject
   html: "<html>body</html>",
   text: "body",
   contentItemIds: ["a", "b", "c"],
-  fromEmail: "fahed@axis-gps.com",
+  fromEmail: "axisgpscana@gmail.com",
   toEmail: "khaled-s@axis-gps.com",
   sendMode: "TEST",
   ...overrides,
@@ -103,12 +103,12 @@ describe("canonical payload and hashing", () => {
 
 describe("approval re-validation", () => {
   const hash = computeApprovalHash(matter());
-  const expected = { fromEmail: "fahed@axis-gps.com", toEmail: "khaled-s@axis-gps.com" };
+  const expected = { fromEmail: "axisgpscana@gmail.com", toEmail: "khaled-s@axis-gps.com" };
 
   const stored = (overrides: Partial<StoredApproval> = {}): StoredApproval => ({
     id: "appr_1",
     contentHash: hash,
-    fromEmail: "fahed@axis-gps.com",
+    fromEmail: "axisgpscana@gmail.com",
     toEmail: "khaled-s@axis-gps.com",
     sendMode: "TEST",
     consumedAt: null,

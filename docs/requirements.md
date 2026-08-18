@@ -357,7 +357,7 @@ Monday sync never removes it). Suppression (hard bounce/complaint/manual) is lik
   in `CampaignAudienceExclusion` (no fake recipient rows); duplicate sources collapsing into one
   destination are **retained**, counted as `duplicateSourcesCollapsed` (not exclusions).
 - **TEST mode never fans out:** resolving N intended recipients sends **zero** emails; test sends are
-  isolated in `CampaignTestSend` (`fahed@axis-gps.com → khaled-s@axis-gps.com`, one per explicit
+  isolated in `CampaignTestSend` (`axisgpscana@gmail.com → khaled-s@axis-gps.com`, one per explicit
   action) and never change production recipient state.
 - Eligibility is **always derived** (no stored `eligible` flag).
 

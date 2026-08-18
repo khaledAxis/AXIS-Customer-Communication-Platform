@@ -7,6 +7,7 @@ import {
   UnsafeTestEnvelopeError,
   assertAuthorizedTestSender,
   assertSafeTestEnvelope,
+  hasHeaderInjection,
 } from "./testSendPolicy";
 
 /**
@@ -111,13 +112,13 @@ describe("envelope: audience cannot widen", () => {
 describe("envelope: sender", () => {
   it("accepts the authorized sender", () => {
     expect(assertAuthorizedTestSender(AUTHORIZED_TEST_SENDER)).toBe(AUTHORIZED_TEST_SENDER);
-    expect(assertAuthorizedTestSender("  FAHED@AXIS-GPS.COM ")).toBe(AUTHORIZED_TEST_SENDER);
+    expect(assertAuthorizedTestSender("  AXISGPSCANA@GMAIL.COM ")).toBe(AUTHORIZED_TEST_SENDER);
   });
 
   it.each([
     "someone@axis-gps.com",
-    "fahed@evil.com",
-    "fahed@axis-gps.com.evil.com",
+    "axisgpscana@evil.com",
+    "axisgpscana@gmail.com.evil.com",
     "khaled-s@axis-gps.com",
     "",
   ])("rejects the unauthorized sender %j", (address) => {
@@ -127,5 +128,47 @@ describe("envelope: sender", () => {
   it("rejects a null or undefined sender", () => {
     expect(() => assertAuthorizedTestSender(null)).toThrow(UnauthorizedTestSenderError);
     expect(() => assertAuthorizedTestSender(undefined)).toThrow(UnauthorizedTestSenderError);
+  });
+});
+
+describe("envelope: header / newline injection", () => {
+  it("rejects a recipient carrying a smuggled Bcc header", () => {
+    // A CR/LF in an address can forge extra SMTP headers.
+    for (const address of [
+      "khaled-s@axis-gps.com\r\nBcc: attacker@evil.com",
+      "khaled-s@axis-gps.com\nBcc: attacker@evil.com",
+      "khaled-s@axis-gps.com\rCc: attacker@evil.com",
+      "khaled-s@axis-gps.com\r\n",
+    ]) {
+      expect(() => assertSafeTestEnvelope({ to: address })).toThrow(UnsafeTestEnvelopeError);
+    }
+  });
+
+  it("rejects a sender carrying injected headers", () => {
+    expect(() =>
+      assertAuthorizedTestSender("axisgpscana@gmail.com\r\nBcc: attacker@evil.com"),
+    ).toThrow(UnauthorizedTestSenderError);
+  });
+
+  it("rejects NUL and other control characters in an address", () => {
+    expect(() => assertSafeTestEnvelope({ to: "khaled-s@axis-gps.com\u0000" })).toThrow(
+      UnsafeTestEnvelopeError,
+    );
+    expect(() => assertSafeTestEnvelope({ to: "khaled-s@axis-gps.com\u007f" })).toThrow(
+      UnsafeTestEnvelopeError,
+    );
+  });
+
+  it("detects injection in arbitrary header values", () => {
+    expect(hasHeaderInjection("normal subject")).toBe(false);
+    expect(hasHeaderInjection("subject\r\nBcc: x@evil.com")).toBe(true);
+    expect(hasHeaderInjection("subject\nx")).toBe(true);
+    expect(hasHeaderInjection(null)).toBe(false);
+    expect(hasHeaderInjection(undefined)).toBe(false);
+  });
+
+  it("keeps normal Hebrew and Arabic subjects valid", () => {
+    expect(hasHeaderInjection("[AXIS TEST] חדשות AXIS — ספטמבר")).toBe(false);
+    expect(hasHeaderInjection("[AXIS TEST] أخبار AXIS")).toBe(false);
   });
 });

@@ -38,7 +38,7 @@ export class FakeEmailProvider implements EmailProvider {
     return {
       configured,
       problems: configured ? [] : (this.behaviour.problems ?? ["Fake provider is not configured."]),
-      senderEmail: "fahed@axis-gps.com",
+      senderEmail: "axisgpscana@gmail.com",
     };
   }
 
@@ -53,9 +53,9 @@ export class FakeEmailProvider implements EmailProvider {
     return (
       this.behaviour.result ?? {
         outcome: "ACCEPTED",
-        statusCode: 202,
+        statusCode: 250,
         providerMessageId: `fake-${this.sent.length}`,
-        message: "Microsoft 365 accepted the test email for delivery.",
+        message: "Gmail accepted the test email for delivery.",
       }
     );
   }

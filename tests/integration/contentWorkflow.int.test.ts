@@ -312,7 +312,7 @@ d("content and newsletter workflow", () => {
     const preview = await newsletterService.getNewsletterPreview(newsletter.id);
 
     expect(preview!.delivery.mode).toBe("TEST");
-    expect(preview!.delivery.from).toBe("fahed@axis-gps.com");
+    expect(preview!.delivery.from).toBe("axisgpscana@gmail.com");
     expect(preview!.delivery.to).toBe("khaled-s@axis-gps.com");
     expect(preview!.availability.canSend).toBe(false);
 

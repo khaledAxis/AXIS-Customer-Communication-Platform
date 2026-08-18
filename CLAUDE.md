@@ -47,13 +47,13 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | ORM | **Prisma** | All schema changes via migrations — **no manual DDL** |
 | Auth | **Auth.js (NextAuth v5)** | Credentials for MVP; server-enforced RBAC |
 | Container | **Docker** | For Postgres locally, and app image later |
-| Email (TEST) | **Microsoft Graph** app-only via `@azure/msal-node` | `POST /users/{sender}/sendMail`; behind the `EmailProvider` port (ADR-0013) |
+| Email (TEST) | **Gmail SMTP** via `nodemailer` | `smtp.gmail.com:465`, implicit TLS, Google **App Password**; behind the `EmailProvider` port (ADR-0014) |
 | Email (bulk, later) | **Provider via HTTP API** (e.g. Resend/Postmark/SES) | Behind the same port; **no bulk vendor SDK committed yet** |
 | CRM source | **Monday.com** (GraphQL API + webhooks) | **Source of truth** for CRM master data; platform is a **read-only projection** (ADR-0007) via a `CrmSource` port |
 | Send safety | **Send-mode gate** (`TEST` default / `PRODUCTION`) | Server-side safe-send redirect; going live is an explicit admin action (ADR-0008) |
 | Email HTML | **One canonical renderer** in `domain/email` | Table-based + inline styles; preview and sender share it (ADR-0011). No email-template library |
 | Rich text | **Restricted markup rendered server-side** | No stored client HTML; XSS-safe by construction. No WYSIWYG dependency (ADR-0012) |
-| Media | **`MediaStore` port**; local disk in dev | Images in git-ignored `var/media/`, never in `public/`, never in PostgreSQL (ADR-0012) |
+| Media | **`MediaStore` port**; **Cloudinary** hosted, local disk fallback | Selected by `MEDIA_PROVIDER`; `CLOUDINARY_URL` is a **secret**; never in `public/`, never in PostgreSQL (ADR-0012/0016) |
 | Jobs | Deferred | In-process scheduling first; **Redis/BullMQ only when justified** (see ADR-0005) |
 
 **Not yet installed, and must not be added until its milestone has a concrete need:** Prisma,
@@ -195,18 +195,42 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 - The renderer is **pure and deterministic** (same input ⇒ byte-identical output), uses **table layout
   + inline styles**, and sets **real `dir` semantics** for HE/AR — not just `text-align`. `UNKNOWN`
   language stays LTR. Tailwind classes must never be relied on inside email HTML.
+- **Layout (ADR-0015):** the **first included item is the featured article** (hero image, `<h1>`, blue
+  kicker, pill CTA); the rest are compact `<h2>` blocks. 640px centred container, AXIS logo header,
+  centred footer with contact + unsubscribe. Never reproduce another company's branding.
+- **Brand logo:** `AXIS_EMAIL_LOGO_URL` is accepted only when `isPublicHttpsUrl` passes — **HTTPS
+  only**, no loopback/private/link-local/internal host — otherwise the **text wordmark fallback**
+  renders. Displayed at 200px wide with `height:auto` + `max-width:100%` (never stretched or cropped),
+  `dir="ltr"` so RTL cannot reorder it, alt text `AXIS Advanced Mapping Solutions`. Cloudinary logos
+  are delivered at `c_limit,w_440,q_auto` — a full-size logo is real weight in every message.
+- **Latin phrases inside RTL copy are isolated** with `<span dir="ltr">` via `escapeWithLtrIsolation`,
+  as **whole phrases** (spaces/commas/ampersands included) — per-word isolation leaves the separators
+  neutral and lets punctuation drift to the wrong edge. Isolation runs **before** escaping so an entity
+  can never be split. Use the `dir` attribute, not `unicode-bidi` (Outlook ignores the CSS).
+- **Image hosting (ADR-0016):** uploads go through the `MediaStore` port — `CloudinaryMediaStore` when
+  `MEDIA_PROVIDER=cloudinary`, else local disk. **Local validation (magic bytes, allow-list, SVG
+  rejection, 5 MB cap, filename sanitisation) always runs BEFORE any provider call** — the provider is
+  a store, not a gatekeeper. Only `secure_url` is persisted; a failed upload yields **no** URL so the
+  existing article image is kept. Assets use generated public IDs under `axis-newsletter/content/`.
+  `remove()` is a deliberate **no-op** for hosted assets — a sent email still references the URL.
+  Email delivery inserts `c_limit,w_1280,q_auto` (idempotent, never `f_auto`/AVIF; WebP→`f_jpg` for
+  Outlook). `CLOUDINARY_URL` embeds credentials: never log, persist, return, or expose it.
+- **Non-deliverable images are OMITTED** (`deliverableImageUrl`): anything not `http(s)`, or hosted on
+  `localhost`/`127.0.0.1`/`0.0.0.0`/`[::1]`, is dropped so a recipient never sees a broken image. The
+  same rule guards the "View as webpage" link. Preview and send share the omission — divergence would
+  break the approval hash and let someone approve a layout that never arrives.
 - **Client-supplied HTML is never stored or emitted.** Authors write a restricted markup; the server
   escapes it and emits only tags it generates itself, so XSS-safety is structural, not sanitizer-based.
   Link schemes are limited to `http`/`https`/`mailto`.
 - **Images:** type allow-list + magic-byte sniffing + size cap; **SVG rejected**; the client filename
   never reaches disk (a storage name is generated); files live outside `public/` and are served by a
   handler that pins the content type and sends `nosniff`. Access goes through the **`MediaStore` port**.
-- **The test-send surface is non-editable.** Sender `fahed@axis-gps.com` and recipient
+- **The test-send surface is non-editable.** Sender `axisgpscana@gmail.com` and recipient
   `khaled-s@axis-gps.com` are hard-coded constants rendered as read-only text (the panel has **no input
   element**), and any other recipient is rejected server-side. Preview itself creates **no** recipient,
   test-send, or event rows and makes no network call.
 
-### SAFE TEST sending via Microsoft Graph (ADR-0013)
+### SAFE TEST sending via Gmail SMTP (ADR-0013 approval model + ADR-0014 transport)
 
 - **The audience is unrepresentable, not merely validated.** `TestEmailMessage` has **no `from`,
   `cc`, `bcc` or `replyTo`**, and `to` is a single string. The sender is adapter configuration.
@@ -219,19 +243,26 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
   reviewed and hashed messages are byte-identical.
 - **One approval ⇒ at most one submission**, enforced by a **UNIQUE** `CampaignTestSend.approvalId`.
   The attempt row is written *before* the provider call, so a concurrent/double-clicked request loses
-  at the database and never reaches Microsoft. Approving again revokes the previous unused approval.
-- **`202` means accepted, never delivered.** Say "Microsoft 365 accepted the test email for delivery".
-  A timeout/unreadable response is `UNCERTAIN` and is **never auto-retried** — that could duplicate
-  real mail; a human checks Sent Items.
+  at the database and never reaches Gmail. Approving again revokes the previous unused approval.
+- **SMTP `250` means accepted, never delivered.** Say "Gmail accepted the test email for delivery".
+  A broken connection or unreadable result is `UNCERTAIN` and is **never auto-retried** — that could
+  duplicate real mail; a human checks the Sent folder.
 - **Test sends never touch production ledgers** — only `CampaignTestSend`. No audience resolution, no
   fan-out, `CampaignRecipient`/`CampaignEvent` untouched.
 - **Configuration is validated for shape, not just presence**, so a placeholder reports
-  *"Microsoft email provider is not configured"* instead of failing opaquely at send time. The
-  capability check never calls Graph.
-- **Never** log or persist tokens, secrets, or `Authorization` headers. A mailbox password must never
-  be requested or stored. Tenant `Mail.Send` is **tenant-wide by default** — scope it with Exchange
-  RBAC (`docs/microsoft-graph-setup.md`), and treat tenant config as untrusted: the app-level guards
-  are mandatory regardless.
+  *"Gmail test email provider is not configured"* instead of failing opaquely at send time. The
+  capability check never opens a connection.
+- **Authorized addresses are hard-coded constants** — sender `axisgpscana@gmail.com`, recipient
+  `khaled-s@axis-gps.com`. `SAFE_TEST_SENDER`/`SAFE_TEST_RECIPIENT` are **cross-checked against** them,
+  never read as the source of truth: an env var must never be able to redirect a test email. A
+  mismatch makes sending unavailable. `GMAIL_SMTP_USER` must equal the authorized sender, because
+  Gmail sends as the authenticated account.
+- **Header/newline injection is refused, not sanitized** — any control character in an address or
+  subject can forge an SMTP header (a smuggled `Bcc:`). See `hasHeaderInjection`.
+- **Never** log or persist the App Password or any SMTP AUTH data. A normal account password must
+  never be requested or stored — only a revocable 16-character Google App Password
+  (`docs/gmail-smtp-setup.md`). Gmail is a **test** transport; bulk customer sending still needs the
+  ADR-0004 provider.
 
 ### Contact consent / eligibility (never email the wrong person)
 

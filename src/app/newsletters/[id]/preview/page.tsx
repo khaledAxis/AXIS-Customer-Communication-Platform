@@ -60,7 +60,7 @@ export default async function NewsletterPreviewPage({
       {feedback.sent ? (
         <div role="status" className="mb-6 rounded-lg border border-emerald-300 bg-emerald-50 p-4">
           <p className="text-sm font-semibold text-emerald-900">
-            {feedback.message ?? "Microsoft 365 accepted the test email for delivery."}
+            {feedback.message ?? "Gmail accepted the test email for delivery."}
           </p>
           <p className="mt-1 text-xs text-emerald-800">
             Accepted for delivery is not the same as received. Check the {delivery.to} inbox to
@@ -165,13 +165,17 @@ export default async function NewsletterPreviewPage({
             />
           ) : null}
 
-          {testSend?.hasLocalOnlyImages ? (
+          {testSend && testSend.omittedImageCount > 0 ? (
             <Card className="border-amber-200 bg-amber-50 p-5">
-              <h2 className="text-base font-bold text-amber-900">Pictures may not appear</h2>
+              <h2 className="text-base font-bold text-amber-900">
+                {testSend.omittedImageCount === 1 ? "1 picture is" : `${testSend.omittedImageCount} pictures are`}{" "}
+                left out
+              </h2>
               <p className="mt-1 text-sm text-amber-900">
-                Images in this newsletter are stored on this computer, so they will not load in
-                Outlook on another device. The layout and text are unaffected. Publishing images to a
-                shared location is a separate step.
+                They are stored on this computer, so the recipient could never load them. They are
+                left out of the email entirely rather than arriving as a broken image — the preview
+                above shows exactly what will be sent. Publishing pictures to a public web address is
+                a separate step.
               </p>
             </Card>
           ) : null}

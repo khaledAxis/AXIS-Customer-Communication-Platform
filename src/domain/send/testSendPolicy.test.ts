@@ -18,7 +18,7 @@ describe("authorized test addresses", () => {
   });
 
   it("has exactly one authorized sender", () => {
-    expect(AUTHORIZED_TEST_SENDER).toBe("fahed@axis-gps.com");
+    expect(AUTHORIZED_TEST_SENDER).toBe("axisgpscana@gmail.com");
   });
 
   it("accepts the authorized recipient regardless of case or padding", () => {
@@ -53,7 +53,7 @@ describe("authorized test addresses", () => {
   });
 
   it("recognises only the authorized sender", () => {
-    expect(isAuthorizedTestSender("fahed@axis-gps.com")).toBe(true);
+    expect(isAuthorizedTestSender("axisgpscana@gmail.com")).toBe(true);
     expect(isAuthorizedTestSender("someone@axis-gps.com")).toBe(false);
   });
 });
