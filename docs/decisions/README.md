@@ -37,7 +37,7 @@ default awaiting confirmation from stakeholders.
 | [0001](0001-nextjs-app-router-architecture.md) | Next.js App Router as the application architecture | Accepted |
 | [0002](0002-postgresql-and-prisma.md) | PostgreSQL with Prisma ORM and migrations | Accepted |
 | [0003](0003-authentication-with-authjs.md) | Authentication & authorization with Auth.js + server-side RBAC | Accepted |
-| [0004](0004-email-provider-abstraction.md) | Email provider behind an internal port; vendor deferred | Accepted (vendor TBD) |
+| [0004](0004-email-provider-abstraction.md) | Email provider behind an internal port; vendor deferred | Accepted — **vendor selected in ADR-0025 (Resend); the port is unchanged** |
 | [0005](0005-job-queue-strategy.md) | Defer Redis/BullMQ; in-process scheduling first | Accepted |
 | [0006](0006-contact-data-model-and-required-fields.md) | Contact partial-data model & required-fields reconciliation | Accepted — origin/dedupe **amended by ADR-0007** |
 | [0007](0007-monday-crm-source-of-truth.md) | Monday.com as the CRM source of truth (platform is a read-only projection) | Accepted |
@@ -56,6 +56,9 @@ default awaiting confirmation from stakeholders.
 | [0020](0020-communication-language-assignment.md) | Staff-assigned communication language, bulk enrichment & never-inferred values | Accepted |
 | [0021](0021-communication-consent-management.md) | Staff-recorded communication consent, evidence requirements & bulk safeguards | Accepted |
 | [0022](0022-final-audience-and-send-readiness.md) | Immutable final audience, hash-bound production approval & the send-readiness checklist | Accepted |
+| [0023](0023-authentication-and-four-eyes-enforcement.md) | Credentials authentication (Argon2id), server-enforced roles & enforced four-eyes approval | Accepted — **implements ADR-0003** |
+| [0024](0024-public-unsubscribe-and-production-delivery.md) | Public tokenized unsubscribe, production delivery ledger & the disabled production provider | Accepted — **vendor still deferred (ADR-0004)** |
+| [0025](0025-resend-provider-domain-auth-and-internal-pilot.md) | **Resend** selected as the production provider, AXIS domain authentication, signed webhooks & the internal provider pilot | Accepted — **production delivery still LOCKED** |
 
 ---
 

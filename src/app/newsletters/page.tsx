@@ -10,6 +10,7 @@ import {
 } from "../../ui/labels";
 import { Badge, Card, EmptyState, PageHeader, buttonPrimary, buttonSubtle } from "../../ui/primitives";
 import { deleteNewsletterAction, duplicateNewsletterAction } from "./actions";
+import { Capability, requirePageCapability } from "../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,9 @@ export default async function NewslettersPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.MANAGE_NEWSLETTERS, "/newsletters");
   const { error } = await searchParams;
   const newsletters = await listNewsletters();
 

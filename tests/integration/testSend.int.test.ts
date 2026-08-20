@@ -7,6 +7,12 @@ import { setEmailProviderForTesting } from "../../src/server/integrations/email"
 import * as contentService from "../../src/server/services/contentService";
 import * as newsletterService from "../../src/server/services/newsletterService";
 import * as testSendService from "../../src/server/services/testSendService";
+import {
+  actAs,
+  clearTestActor,
+  createTestUser,
+  type TestUser,
+} from "../support/actor";
 
 /**
  * SAFE TEST send workflow against real PostgreSQL, with a FAKE provider.
@@ -58,7 +64,16 @@ d("SAFE TEST send", () => {
     return { campaignId: result.data.id, article };
   };
 
+  /** Every service call in this suite runs as a real, signed-in manager. */
+
+  let operator: TestUser;
+
+
   beforeAll(async () => {
+
+    operator = await createTestUser({ prefix: "testsend", role: "MANAGER" });
+
+    actAs(operator);
     prisma = getPrisma();
     await prisma.$connect();
   });
@@ -69,6 +84,8 @@ d("SAFE TEST send", () => {
   });
 
   afterAll(async () => {
+
+    clearTestActor();
     setEmailProviderForTesting(undefined); // never leave a fake installed
     try {
       await prisma.campaignTestSend.deleteMany({ where: { campaignId: { in: created.campaign } } });
@@ -84,7 +101,9 @@ d("SAFE TEST send", () => {
     } finally {
       await prisma.$disconnect();
     }
-  });
+  
+    await getPrisma().user.deleteMany({ where: { id: operator.id } });
+});
 
   // Installed for the first test too (afterEach only runs between tests).
   const install = (p: FakeEmailProvider) => {
@@ -443,7 +462,13 @@ d("SAFE TEST send", () => {
 
     expect(await prisma.campaignRecipient.count({ where: { campaignId } })).toBe(0);
     expect(await prisma.campaignEvent.count({ where: { campaignId } })).toBe(0);
-    expect(await prisma.campaignRecipientSource.count()).toBe(0);
+    // Scoped to THIS campaign: production delivery ledgers may legitimately exist for
+    // other campaigns since ADR-0024, and a SAFE TEST must simply never add to one.
+    expect(
+      await prisma.campaignRecipientSource.count({
+        where: { recipient: { campaignId } },
+      }),
+    ).toBe(0);
     // Only the test ledger records the test.
     expect(await prisma.campaignTestSend.count({ where: { campaignId } })).toBe(1);
   });

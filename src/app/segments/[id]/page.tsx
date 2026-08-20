@@ -19,6 +19,7 @@ import {
   previewAudienceAction,
   saveSegmentAction,
 } from "../actions";
+import { Capability, requirePageCapability } from "../../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,9 @@ export default async function SegmentPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ error?: string }>;
 }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.MANAGE_SEGMENTS, "/segments");
   const { id } = await params;
   const { error } = await searchParams;
   const [segment, lookups] = await Promise.all([getSegment(id), getLookupOptions()]);

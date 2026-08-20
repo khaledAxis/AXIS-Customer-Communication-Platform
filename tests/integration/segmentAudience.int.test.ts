@@ -29,6 +29,12 @@ import {
   snapshotCampaignAudience,
 } from "../../src/server/services/campaignAudienceService";
 import { getAuthoringUserId } from "../../src/server/services/newsletterService";
+import {
+  actAs,
+  clearTestActor,
+  createTestUser,
+  type TestUser,
+} from "../support/actor";
 
 /**
  * Audience resolution against real PostgreSQL, over a run-scoped synthetic CRM.
@@ -115,7 +121,16 @@ d("segment audience resolution", () => {
   let prisma: ReturnType<typeof getPrisma>;
   const now = new Date();
 
+  /** Every service call in this suite runs as a real, signed-in manager. */
+
+  let operator: TestUser;
+
+
   beforeAll(async () => {
+
+    operator = await createTestUser({ prefix: "segment", role: "MANAGER" });
+
+    actAs(operator);
     prisma = getPrisma();
 
     const industry = await prisma.industry.create({
@@ -305,6 +320,8 @@ d("segment audience resolution", () => {
   });
 
   afterAll(async () => {
+
+    clearTestActor();
     if (!HAS_DB) return;
     await prisma.campaignAudienceExclusion.deleteMany({
       where: { campaignId: { in: ids.campaigns } },
@@ -334,7 +351,9 @@ d("segment audience resolution", () => {
       where: { mondayColumnId: `cls-${RUN}` },
     });
     await prisma.industry.deleteMany({ where: { mondayColumnId: `col-${RUN}` } });
-  });
+  
+    await getPrisma().user.deleteMany({ where: { id: operator.id } });
+});
 
   const destinationsOf = async (
     conditions: SegmentCondition[],

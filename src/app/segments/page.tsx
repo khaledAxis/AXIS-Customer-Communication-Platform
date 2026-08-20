@@ -10,12 +10,16 @@ import {
   buttonPrimary,
   buttonSecondary,
 } from "../../ui/primitives";
+import { Capability, requirePageCapability } from "../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Audiences — AXIS" };
 
 export default async function SegmentsPage() {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.MANAGE_SEGMENTS, "/segments");
   const segments = await listSegments();
 
   return (

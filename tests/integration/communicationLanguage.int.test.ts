@@ -20,6 +20,12 @@ import {
 } from "../../src/server/services/communicationService";
 import { previewAudience } from "../../src/server/services/segmentService";
 import { syncCrmFromMonday } from "../../src/server/services/crmSyncService";
+import {
+  actAs,
+  clearTestActor,
+  createTestUser,
+  type TestUser,
+} from "../support/actor";
 
 /**
  * Staff-assigned communication language against real PostgreSQL.
@@ -75,7 +81,16 @@ function definition(requireLanguage: boolean) {
 d("communication language assignment", () => {
   let prisma: ReturnType<typeof getPrisma>;
 
+  /** Every service call in this suite runs as a real, signed-in manager. */
+
+  let operator: TestUser;
+
+
   beforeAll(async () => {
+
+    operator = await createTestUser({ prefix: "lang", role: "MANAGER" });
+
+    actAs(operator);
     prisma = getPrisma();
 
     const company = async (key: string, data: Record<string, unknown>) => {
@@ -170,6 +185,8 @@ d("communication language assignment", () => {
   });
 
   afterAll(async () => {
+
+    clearTestActor();
     if (!HAS_DB) return;
     setCrmSourceForTesting(undefined);
     await prisma.auditLog.deleteMany({
@@ -189,7 +206,9 @@ d("communication language assignment", () => {
     await prisma.communicationAddress.deleteMany({
       where: { normalizedEmail: { in: ALL_EMAILS } },
     });
-  });
+  
+    await getPrisma().user.deleteMany({ where: { id: operator.id } });
+});
 
   const idOf = (address: string) => ids.addresses.get(address) as string;
   const read = (address: string) =>

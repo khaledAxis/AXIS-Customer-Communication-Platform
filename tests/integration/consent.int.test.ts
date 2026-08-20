@@ -27,6 +27,12 @@ import {
   setLanguage,
 } from "../../src/server/services/communicationService";
 import { previewAudience } from "../../src/server/services/segmentService";
+import {
+  actAs,
+  clearTestActor,
+  createTestUser,
+  type TestUser,
+} from "../support/actor";
 
 /**
  * Staff-recorded consent against real PostgreSQL (ADR-0021).
@@ -88,7 +94,16 @@ function deny(addressIds: string[], overrides: Record<string, unknown> = {}) {
 d("communication consent", () => {
   let prisma: ReturnType<typeof getPrisma>;
 
+  /** Every service call in this suite runs as a real, signed-in manager. */
+
+  let operator: TestUser;
+
+
   beforeAll(async () => {
+
+    operator = await createTestUser({ prefix: "consent", role: "MANAGER" });
+
+    actAs(operator);
     prisma = getPrisma();
 
     const company = async (key: string, data: Record<string, unknown>) => {
@@ -179,6 +194,8 @@ d("communication consent", () => {
   });
 
   afterAll(async () => {
+
+    clearTestActor();
     if (!HAS_DB) return;
     setCrmSourceForTesting(undefined);
     await prisma.auditLog.deleteMany({
@@ -198,7 +215,9 @@ d("communication consent", () => {
     await prisma.communicationAddress.deleteMany({
       where: { normalizedEmail: { in: ALL_EMAILS } },
     });
-  });
+  
+    await getPrisma().user.deleteMany({ where: { id: operator.id } });
+});
 
   const idOf = (address: string) => ids.addresses.get(address) as string;
   const read = (address: string) =>

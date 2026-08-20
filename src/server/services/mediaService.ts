@@ -1,4 +1,5 @@
 import { validateImageUpload, type ImageRejectionReason } from "../../domain/media/imagePolicy";
+import { Capability, requireCapability } from "../auth/session";
 import { getMediaStore } from "../media";
 import { MediaUploadError, type MediaConfigStatus, type StoredMedia } from "../media/mediaStore";
 
@@ -24,6 +25,8 @@ export async function uploadNewsletterImage(file: {
   type: string;
   bytes: Uint8Array;
 }): Promise<UploadResult> {
+  // Uploading writes to shared storage referenced by sent newsletters.
+  await requireCapability(Capability.MANAGE_CONTENT);
   // Local validation is mandatory and is NEVER delegated to the storage provider:
   // magic-byte sniffing, type allow-list, size ceiling and SVG rejection all run here.
   const validation = validateImageUpload({

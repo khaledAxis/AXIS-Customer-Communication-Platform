@@ -36,6 +36,7 @@ const addr = (label: string): string => `${label}-${uid()}@axis-test.invalid`;
 const created = {
   campaignContentItem: [] as string[],
   campaignRecipient: [] as string[],
+  finalAudience: [] as string[],
   automationRun: [] as string[],
   campaign: [] as string[],
   automation: [] as string[],
@@ -67,6 +68,38 @@ d("PostgreSQL-backed constraints", () => {
     return campaign;
   };
 
+  /**
+   * A campaign plus the frozen audience its recipients must originate from.
+   *
+   * `CampaignRecipient.finalAudienceId` is required (ADR-0024): a delivery destination
+   * with no provenance is one nobody approved, so these fixtures have to go through
+   * the same door production does.
+   */
+  const newCampaignWithAudience = async (name: string) => {
+    const campaign = await newCampaign(name);
+    const audience = await prisma.campaignFinalAudience.create({
+      data: {
+        campaignId: campaign.id,
+        segmentName: `${name} audience`,
+        segmentCriteria: { version: 1, conditions: [], groups: [] },
+        campaignLanguage: "HE",
+        matchedCompanies: 0,
+        matchedContacts: 0,
+        matchedRecords: 0,
+        withCandidateEmail: 0,
+        eligible: 0,
+        uniqueDestinations: 0,
+        excluded: 0,
+        duplicateSourcesCollapsed: 0,
+        breakdown: {},
+        audienceHash: `hash-${name}-${RUN}`,
+        createdById: campaign.createdById,
+      },
+    });
+    created.finalAudience.push(audience.id);
+    return { campaign, audience };
+  };
+
   beforeAll(async () => {
     prisma = getPrisma();
     await prisma.$connect();
@@ -79,6 +112,7 @@ d("PostgreSQL-backed constraints", () => {
       const byId = (ids: string[]) => ({ where: { id: { in: ids } } });
       await prisma.campaignContentItem.deleteMany(byId(created.campaignContentItem));
       await prisma.campaignRecipient.deleteMany(byId(created.campaignRecipient));
+      await prisma.campaignFinalAudience.deleteMany(byId(created.finalAudience));
       await prisma.newsletterAutomationRun.deleteMany(byId(created.automationRun));
       await prisma.campaign.deleteMany(byId(created.campaign));
       await prisma.newsletterAutomation.deleteMany(byId(created.automation));
@@ -102,27 +136,77 @@ d("PostgreSQL-backed constraints", () => {
   });
 
   it("CampaignRecipient is unique per (campaignId, normalizedEmail)", async () => {
-    const campaign = await newCampaign("c");
+    const { campaign, audience } = await newCampaignWithAudience("c");
     const email = addr("dup");
     const recipient = await prisma.campaignRecipient.create({
-      data: { campaignId: campaign.id, normalizedEmail: email, intendedEmail: email },
+      data: {
+        campaignId: campaign.id,
+        finalAudienceId: audience.id,
+        normalizedEmail: email,
+        intendedEmail: email,
+      },
     });
     created.campaignRecipient.push(recipient.id);
     await expect(
       prisma.campaignRecipient.create({
-        data: { campaignId: campaign.id, normalizedEmail: email, intendedEmail: email },
+        data: {
+          campaignId: campaign.id,
+          finalAudienceId: audience.id,
+          normalizedEmail: email,
+          intendedEmail: email,
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("CampaignRecipient cannot exist without a final audience", async () => {
+    // The provenance requirement is a database constraint, not a convention: there is
+    // no way to write a delivery destination that nobody approved (ADR-0024).
+    const campaign = await newCampaign("no-audience");
+    const email = addr("orphan");
+    await expect(
+      prisma.campaignRecipient.create({
+        data: {
+          campaignId: campaign.id,
+          finalAudienceId: "does-not-exist",
+          normalizedEmail: email,
+          intendedEmail: email,
+        },
       }),
     ).rejects.toThrow();
   });
 
   it("deleting a Campaign with recipients is blocked (Restrict) — history protected", async () => {
-    const campaign = await newCampaign("c2");
+    const { campaign, audience } = await newCampaignWithAudience("c2");
     const email = addr("history");
     const recipient = await prisma.campaignRecipient.create({
-      data: { campaignId: campaign.id, normalizedEmail: email, intendedEmail: email },
+      data: {
+        campaignId: campaign.id,
+        finalAudienceId: audience.id,
+        normalizedEmail: email,
+        intendedEmail: email,
+      },
     });
     created.campaignRecipient.push(recipient.id);
     await expect(prisma.campaign.delete({ where: { id: campaign.id } })).rejects.toThrow();
+  });
+
+  it("deleting the final audience a recipient came from is blocked (Restrict)", async () => {
+    const { campaign, audience } = await newCampaignWithAudience("c3");
+    const email = addr("provenance");
+    const recipient = await prisma.campaignRecipient.create({
+      data: {
+        campaignId: campaign.id,
+        finalAudienceId: audience.id,
+        normalizedEmail: email,
+        intendedEmail: email,
+      },
+    });
+    created.campaignRecipient.push(recipient.id);
+    // A prepared ledger protects the snapshot it was derived from.
+    await expect(
+      prisma.campaignFinalAudience.delete({ where: { id: audience.id } }),
+    ).rejects.toThrow();
   });
 
   it("a sync-style upsert of a Contact does not touch CommunicationAddress local state", async () => {

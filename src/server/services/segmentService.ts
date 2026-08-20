@@ -15,6 +15,7 @@ import {
 } from "../../domain/segment/segmentDefinition";
 import { EmailSourceType, ExclusionReason, Language } from "../../domain/types";
 
+import { Capability, requireCapability } from "../auth/session";
 import {
   resolveSegmentCandidates,
 } from "../db/repositories/audienceRepository";
@@ -181,6 +182,7 @@ function validatedCriteria(input: unknown): Prisma.InputJsonValue {
 }
 
 export async function createSegment(input: SegmentInput): Promise<string> {
+  await requireCapability(Capability.MANAGE_SEGMENTS);
   const name = input.name.trim();
   if (name === "") {
     throw new SegmentDefinitionError([
@@ -203,6 +205,7 @@ export async function updateSegment(
   id: string,
   input: SegmentInput,
 ): Promise<void> {
+  await requireCapability(Capability.MANAGE_SEGMENTS);
   const name = input.name.trim();
   if (name === "") {
     throw new SegmentDefinitionError([
@@ -221,6 +224,7 @@ export async function updateSegment(
 }
 
 export async function duplicateSegment(id: string): Promise<string> {
+  await requireCapability(Capability.MANAGE_SEGMENTS);
   const prisma = getPrisma();
   const row = await prisma.segment.findUnique({ where: { id } });
   if (!row) throw new Error("Segment not found");
@@ -248,6 +252,7 @@ export class SegmentInUseError extends Error {
  * campaign is part of that campaign's audit trail.
  */
 export async function deleteSegment(id: string): Promise<void> {
+  await requireCapability(Capability.MANAGE_SEGMENTS);
   const prisma = getPrisma();
   const [campaigns, automations] = await Promise.all([
     prisma.campaign.count({ where: { segmentId: id } }),

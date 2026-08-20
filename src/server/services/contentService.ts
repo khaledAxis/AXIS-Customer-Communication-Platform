@@ -4,6 +4,7 @@ import {
   type FieldError,
 } from "../../domain/content/contentValidation";
 import { renderRichText, richTextToPlain } from "../../domain/content/richText";
+import { Capability, requireCapability } from "../auth/session";
 import * as repo from "../db/repositories/contentRepository";
 
 /**
@@ -39,6 +40,7 @@ export interface SaveContentInput extends ContentDraftInput {
 }
 
 export async function createContent(input: SaveContentInput) {
+  await requireCapability(Capability.MANAGE_CONTENT);
   const validation = validateContentDraft(input);
   if (!validation.ok) return fail(validation.errors);
 
@@ -68,6 +70,7 @@ export async function createContent(input: SaveContentInput) {
 }
 
 export async function updateContent(id: string, input: SaveContentInput) {
+  await requireCapability(Capability.MANAGE_CONTENT);
   const validation = validateContentDraft(input);
   if (!validation.ok) return fail(validation.errors);
 
@@ -101,6 +104,7 @@ export async function updateContent(id: string, input: SaveContentInput) {
  * campaign snapshots are frozen copies (ADR-0010).
  */
 export async function setReviewState(id: string, reviewState: "APPROVED" | "REJECTED" | "PENDING_REVIEW") {
+  await requireCapability(Capability.MANAGE_CONTENT);
   const existing = await repo.getContentItem(id);
   if (!existing) return fail([{ field: "id", message: "That article no longer exists." }]);
 
@@ -109,6 +113,7 @@ export async function setReviewState(id: string, reviewState: "APPROVED" | "REJE
 }
 
 export async function deleteContent(id: string) {
+  await requireCapability(Capability.MANAGE_CONTENT);
   const usages = await repo.countCampaignUsages(id);
   if (usages > 0) {
     return fail([

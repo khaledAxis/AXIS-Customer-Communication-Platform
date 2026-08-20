@@ -2,11 +2,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { getNewsletterPreview } from "../../../../server/services/newsletterService";
+import { getPilotStatus } from "../../../../server/services/providerPilotService";
 import { getTestSendStatus } from "../../../../server/services/testSendService";
 import { EmailPreview } from "../../../../ui/EmailPreview";
 import { LANGUAGE_LABEL } from "../../../../ui/labels";
 import { Badge, Card, PageHeader, buttonSecondary } from "../../../../ui/primitives";
+import { ProviderPilotPanel } from "../../../../ui/ProviderPilotPanel";
 import { TestSendPanel } from "../../../../ui/TestSendPanel";
+import { Capability, requirePageCapability } from "../../../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -22,11 +25,27 @@ export default async function NewsletterPreviewPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ approved?: string; sent?: string; error?: string; message?: string; revoked?: string }>;
+  searchParams: Promise<{
+    approved?: string;
+    sent?: string;
+    error?: string;
+    message?: string;
+    revoked?: string;
+    pilotApproved?: string;
+    pilotRevoked?: string;
+    pilotSent?: string;
+  }>;
 }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.MANAGE_NEWSLETTERS, "/newsletters");
   const { id } = await params;
   const feedback = await searchParams;
-  const [preview, testSend] = await Promise.all([getNewsletterPreview(id), getTestSendStatus(id)]);
+  const [preview, testSend, pilot] = await Promise.all([
+    getNewsletterPreview(id),
+    getTestSendStatus(id),
+    getPilotStatus(id),
+  ]);
   if (!preview) notFound();
 
   const { document: doc, html, readiness, delivery } = preview;
@@ -66,6 +85,33 @@ export default async function NewsletterPreviewPage({
             Accepted for delivery is not the same as received. Check the {delivery.to} inbox to
             confirm it arrived.
           </p>
+        </div>
+      ) : null}
+
+      {feedback.pilotSent ? (
+        <div role="status" className="mb-6 rounded-lg border border-indigo-300 bg-indigo-50 p-4">
+          <p className="text-sm font-semibold text-indigo-900">
+            {feedback.message ?? "The provider accepted the pilot email for delivery."}
+          </p>
+          <p className="mt-1 text-xs text-indigo-800">
+            Accepted for delivery is not the same as received. Check the{" "}
+            {pilot?.toEmail ?? "internal"} inbox — including its spam folder, which is
+            part of what a pilot is for.
+          </p>
+        </div>
+      ) : null}
+
+      {feedback.pilotApproved ? (
+        <div role="status" className="mb-6 rounded-lg border border-indigo-300 bg-indigo-50 p-4">
+          <p className="text-sm font-semibold text-indigo-900">
+            Approved for one internal provider pilot.
+          </p>
+        </div>
+      ) : null}
+
+      {feedback.pilotRevoked ? (
+        <div role="status" className="mb-6 rounded-lg border border-slate-300 bg-slate-50 p-4">
+          <p className="text-sm font-semibold text-slate-800">Pilot approval withdrawn.</p>
         </div>
       ) : null}
 
@@ -174,6 +220,48 @@ export default async function NewsletterPreviewPage({
                       state: testSend.lastAttempt.state,
                       acceptedAt: testSend.lastAttempt.acceptedAt?.toISOString() ?? null,
                       message: testSend.lastAttempt.message,
+                    }
+                  : null
+              }
+            />
+          ) : null}
+
+          {/* ------- Internal provider pilot: the PRODUCTION transport, one address ------- */}
+          {pilot ? (
+            <ProviderPilotPanel
+              campaignId={id}
+              providerName={pilot.providerName}
+              providerConfigured={pilot.providerConfigured}
+              providerProblems={pilot.providerProblems}
+              pilotModeEnabled={pilot.pilotModeEnabled}
+              domainVerified={pilot.domainVerified}
+              domain={pilot.domain}
+              fromEmail={pilot.fromEmail}
+              senderName={pilot.senderName}
+              replyToEmail={pilot.replyToEmail}
+              toEmail={pilot.toEmail}
+              subject={pilot.subject}
+              canApprove={pilot.canApprove}
+              canSend={pilot.canSend}
+              message={pilot.message}
+              blockers={[...pilot.blockers]}
+              approval={
+                pilot.approval
+                  ? {
+                      approvedAt: pilot.approval.approvedAt.toISOString(),
+                      approvedByEmail: pilot.approval.approvedByEmail,
+                      valid: pilot.approval.valid,
+                      reason: pilot.approval.reason,
+                    }
+                  : null
+              }
+              lastAttempt={
+                pilot.lastAttempt
+                  ? {
+                      state: pilot.lastAttempt.state,
+                      acceptedAt: pilot.lastAttempt.acceptedAt?.toISOString() ?? null,
+                      providerMessageId: pilot.lastAttempt.providerMessageId,
+                      message: pilot.lastAttempt.message,
                     }
                   : null
               }

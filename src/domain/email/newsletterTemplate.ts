@@ -504,7 +504,17 @@ function renderFooter(doc: NewsletterDocument, dir: "rtl" | "ltr", labels: Label
     );
   }
 
-  const unsubHref = doc.unsubscribeUrl && isSafeUrl(doc.unsubscribeUrl) ? doc.unsubscribeUrl : null;
+  /**
+   * The unsubscribe link obeys the SAME deliverability rule as images and the
+   * "view as webpage" link (ADR-0015, extended by ADR-0024): a URL that only resolves
+   * on the sending machine is dead in a recipient's inbox. When it is not deliverable
+   * the footer falls back to the existing placeholder — the APPEARANCE is identical
+   * either way, and only the href differs.
+   */
+  const unsubHref =
+    doc.unsubscribeUrl && isDeliverableImageUrl(doc.unsubscribeUrl)
+      ? doc.unsubscribeUrl
+      : null;
   const unsubscribe = unsubHref
     ? `<a href="${escapeHtml(unsubHref)}" style="color:${PALETTE.brand};text-decoration:underline;font-weight:bold;">${labels.unsubscribe}</a>`
     : `<span style="color:${PALETTE.brand};text-decoration:underline;font-weight:bold;">${labels.unsubscribe}</span>` +
@@ -649,6 +659,13 @@ ${spacerRow(24)}
 }
 
 /** Plain-text alternative for the multipart/alternative send. */
+/** The plain-text footer line, held to the same deliverability rule as the HTML. */
+function unsubscribeTextLine(doc: NewsletterDocument, labels: Labels): string {
+  return isDeliverableImageUrl(doc.unsubscribeUrl)
+    ? `${labels.unsubscribe}: ${doc.unsubscribeUrl}`
+    : labels.unsubscribe;
+}
+
 export function renderNewsletterText(doc: NewsletterDocument): string {
   const labels = LABELS[localeFor(doc.language)];
   const lines: string[] = [doc.brand.companyName, "", doc.subject, ""];
@@ -666,7 +683,7 @@ export function renderNewsletterText(doc: NewsletterDocument): string {
   if (doc.brand.websiteUrl) lines.push(doc.brand.websiteUrl);
   if (doc.brand.addressLine) lines.push(doc.brand.addressLine);
   lines.push(
-    doc.unsubscribeUrl ? `${labels.unsubscribe}: ${doc.unsubscribeUrl}` : labels.unsubscribe,
+    unsubscribeTextLine(doc, labels),
   );
 
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();

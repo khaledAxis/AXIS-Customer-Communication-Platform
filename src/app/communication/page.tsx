@@ -7,6 +7,7 @@ import {
 import { CommunicationTable } from "../../ui/CommunicationTable";
 import { Card, PageHeader, buttonSecondary, inputClass } from "../../ui/primitives";
 import { setConsentAction, setLanguageAction } from "./actions";
+import { Capability, requirePageCapability } from "../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,9 @@ export default async function CommunicationPage({
 }: {
   searchParams: Promise<Search>;
 }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.VIEW_CRM, "/communication");
   const params = await searchParams;
   const filters = {
     search: one(params.search),

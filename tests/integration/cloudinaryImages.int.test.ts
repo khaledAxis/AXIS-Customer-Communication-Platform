@@ -10,6 +10,12 @@ import { setEmailProviderForTesting } from "../../src/server/integrations/email"
 import * as contentService from "../../src/server/services/contentService";
 import * as newsletterService from "../../src/server/services/newsletterService";
 import * as testSendService from "../../src/server/services/testSendService";
+import {
+  actAs,
+  clearTestActor,
+  createTestUser,
+  type TestUser,
+} from "../support/actor";
 
 /**
  * Cloudinary-backed images end to end, against real PostgreSQL with a FAKE media store.
@@ -102,7 +108,16 @@ d("Cloudinary-backed newsletter images", () => {
     return result.data;
   };
 
+  /** Every service call in this suite runs as a real, signed-in manager. */
+
+  let operator: TestUser;
+
+
   beforeAll(async () => {
+
+    operator = await createTestUser({ prefix: "cloudinary", role: "MANAGER" });
+
+    actAs(operator);
     prisma = getPrisma();
     await prisma.$connect();
   });
@@ -110,6 +125,8 @@ d("Cloudinary-backed newsletter images", () => {
   afterEach(() => install());
 
   afterAll(async () => {
+
+    clearTestActor();
     setMediaStoreForTesting(undefined);
     setEmailProviderForTesting(undefined);
     try {
@@ -122,7 +139,9 @@ d("Cloudinary-backed newsletter images", () => {
     } finally {
       await prisma.$disconnect();
     }
-  });
+  
+    await getPrisma().user.deleteMany({ where: { id: operator.id } });
+});
 
   // ------------------------------------------------------------- upload + validation
 

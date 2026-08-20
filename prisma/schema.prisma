@@ -88,12 +88,36 @@ enum SendMode {
   PRODUCTION
 }
 
+/// Lifecycle of ONE production delivery destination (ADR-0024).
+///
+/// The pre-existing names are kept exactly as they were — renaming an established
+/// state would rewrite the meaning of historical rows. The new members add the
+/// distinctions the delivery pipeline actually needs.
 enum CampaignRecipientState {
+  /// Ledger row prepared from an approved final audience. Nothing has been attempted.
   PENDING
+  /// Passed the dispatch-time veto re-check and is claimed for submission.
   READY
+  /// Being submitted to the provider (the "SUBMITTING" phase).
   SENDING
-  SENT
+  /// Provider took responsibility for delivery. NOT proof the recipient received it.
+  ACCEPTED
+  /// Provider event confirmed delivery to the recipient's mail server.
+  DELIVERED
+  /// Provider event reported a hard bounce. Feeds Suppression.
+  BOUNCED
+  /// Provider event reported a spam complaint. Feeds Suppression.
+  COMPLAINED
+  /// Provider definitively refused. Safe to retry once the cause is fixed.
   FAILED
+  /// We do not know whether the provider accepted it (timeout / unreadable response).
+  /// NEVER auto-retried — that could duplicate a real customer email.
+  UNCERTAIN
+  /// Vetoed at dispatch time by a high-authority fact (unsubscribe, suppression,
+  /// invalid address) that arrived after the audience was approved. Never submitted.
+  SUPPRESSED
+  /// Legacy aggregate from before ACCEPTED/DELIVERED existed. Not produced by new code.
+  SENT
 }
 
 enum TestSendState {
@@ -115,6 +139,23 @@ enum EmailProviderKind {
   // Retained only so historical rows stay readable; no longer selectable (ADR-0014).
   MICROSOFT_GRAPH
   FAKE
+  /// The deliberately inert production adapter (ADR-0024). It refuses to send, so a
+  /// row carrying this value proves a dry run, never a delivery.
+  PRODUCTION_DISABLED
+  /// The production provider (ADR-0025). Used by the internal PROVIDER PILOT and,
+  /// later, by customer delivery. NEVER used by the Gmail SAFE TEST path.
+  RESEND
+}
+
+/// Which independent sending channel a row belongs to (ADR-0025).
+///
+/// The two are deliberately not interchangeable: SAFE TEST goes through Gmail SMTP to
+/// one hard-coded address, and PROVIDER PILOT goes through Resend to one hard-coded
+/// address. An approval minted for one can never authorise a submission on the other,
+/// because the channel is part of what is checked.
+enum SendChannel {
+  SAFE_TEST_GMAIL
+  PROVIDER_PILOT
 }
 
 enum EmailSourceType {
@@ -160,6 +201,13 @@ enum UnsubscribeScope {
   GLOBAL
 }
 
+/// Why an unsubscribe token exists (ADR-0024). A FIXTURE token can only ever act on a
+/// synthetic test address; it is how the flow is exercised without touching a customer.
+enum UnsubscribeTokenPurpose {
+  PRODUCTION
+  FIXTURE
+}
+
 enum UnsubscribeSource {
   RECIPIENT_LINK
   MANUAL
@@ -175,6 +223,8 @@ enum ContentOrigin {
 enum ContentSourceKind {
   INTERNAL
   RSS
+  /// Atom 1.0 feed. Parsed by the same reader as RSS (ADR-0026).
+  ATOM
   WEBSITE
   API
   MANUAL_EXTERNAL
@@ -200,7 +250,11 @@ enum AutomationRunStatus {
   PENDING
   PREPARING
   PREPARED
+  /// Some sources failed but the run still completed usefully (ADR-0026).
+  PARTIAL
   FAILED
+  /// Nothing new to put in a newsletter. NOT an error, and never shown as one.
+  NO_CONTENT
   SKIPPED
 }
 
@@ -266,6 +320,39 @@ enum AuditAction {
   PRODUCTION_APPROVAL_RECORDED
   PRODUCTION_APPROVAL_REVOKED
   CRM_SYNC
+  // Authentication & user administration (ADR-0023). Never carries a password,
+  // a password hash, or a session token.
+  ADMIN_BOOTSTRAPPED
+  USER_CREATED
+  USER_ROLE_CHANGED
+  USER_ACTIVATED
+  USER_DEACTIVATED
+  USER_PASSWORD_CHANGED
+  USER_SIGNED_IN
+  USER_SIGN_IN_FAILED
+  // Production delivery preparation (ADR-0024). None of these sends anything.
+  DELIVERY_LEDGER_PREPARED
+  PROVIDER_EVENT_INGESTED
+  // Production provider onboarding (ADR-0025). None of these sends a customer email.
+  PROVIDER_DOMAIN_CHECKED
+  PROVIDER_PILOT_APPROVED
+  PROVIDER_PILOT_ATTEMPTED
+  WEBHOOK_REJECTED
+  // Content sourcing, review and assisted automation (ADR-0026). None of these
+  // sends anything, and none creates a CampaignRecipient.
+  CONTENT_SOURCE_CREATED
+  CONTENT_SOURCE_UPDATED
+  CONTENT_SOURCE_ENABLED
+  CONTENT_SOURCE_DISABLED
+  CONTENT_INGESTION_RUN
+  CONTENT_APPROVED
+  CONTENT_REJECTED
+  NEWSLETTER_DRAFT_CREATED_FROM_CONTENT
+  AUTOMATION_CREATED
+  AUTOMATION_UPDATED
+  AUTOMATION_PAUSED
+  AUTOMATION_ENABLED
+  AUTOMATION_RUN
   ADMIN_CHANGE
 }
 
@@ -498,54 +585,94 @@ model CompanyProduct {
 // ============================================================================
 // Users / content / segments / campaigns (local)
 // ============================================================================
+/// AXIS staff account (ADR-0003, implemented by ADR-0023).
+///
+/// `passwordHash` holds an Argon2id PHC string and NOTHING else — never a plaintext
+/// password, never a reversibly-encrypted one. It is never selected into any type
+/// that reaches a client component.
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  name         String?
-  role         Role     @default(MANAGER)
-  passwordHash String
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  name               String?
+  role               Role      @default(MANAGER)
+  passwordHash       String
+  isActive           Boolean   @default(true)
+  /// Marks a non-human historical actor (the pre-authentication development
+  /// stand-in). A system account can NEVER sign in and can never satisfy a
+  /// production approval, but its id stays referenced by historical audit rows.
+  isSystemAccount    Boolean   @default(false)
+  /// Set when an administrator issues an initial or reset password, so the user is
+  /// asked to choose their own. See ADR-0023 for the v1 limitation.
+  mustChangePassword Boolean   @default(false)
+  lastLoginAt        DateTime?
+  deactivatedAt      DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   createdCampaigns    Campaign[]                   @relation("CampaignCreator")
   approvedCampaigns   Campaign[]                   @relation("CampaignApprover")
   testSendApprovals   CampaignTestApproval[]       @relation("TestSendApprover")
   productionApprovals CampaignProductionApproval[] @relation("ProductionApprover")
+  preparedAudiences   CampaignFinalAudience[]      @relation("FinalAudiencePreparer")
+  createdSources      ContentSource[]              @relation("ContentSourceCreator")
+  reviewedContent     ContentItem[]                @relation("ContentReviewer")
+
+  @@index([isActive])
+  @@index([role])
 }
 
 model ContentItem {
-  id          String             @id @default(cuid())
-  title       String
-  summary     String? // excerpt/summary — external items may be link+title+summary only
-  language    Language           @default(UNKNOWN) // UNKNOWN valid during ingestion; human review can correct
-  origin      ContentOrigin      @default(INTERNAL)
-  reviewState ContentReviewState @default(APPROVED) // ingestion service creates INGESTED items as PENDING_REVIEW
-  subject     String?
-  preheader   String?
-  bodyHtml    String? // optional — external content may not carry full HTML
-  bodyText    String?
+  id            String             @id @default(cuid())
+  title         String
+  summary       String? // excerpt/summary — external items may be link+title+summary only
+  language      Language           @default(UNKNOWN) // UNKNOWN valid during ingestion; human review can correct
+  origin        ContentOrigin      @default(INTERNAL)
+  reviewState   ContentReviewState @default(APPROVED) // ingestion service creates INGESTED items as PENDING_REVIEW
+  subject       String?
+  preheader     String?
+  bodyHtml      String? // optional — external content may not carry full HTML
+  bodyText      String?
   // Lead image shown at the top of this item in the rendered newsletter.
   // `imageUrl` is an application-owned reference (media route or absolute URL) —
   // binary data is NEVER stored in PostgreSQL (see MediaStore port).
-  imageUrl    String?
-  imageAlt    String? // accessibility + shown when an email client blocks images
+  imageUrl      String?
+  imageAlt      String? // accessibility + shown when an email client blocks images
   // external / ingested provenance
-  sourceId    String?
-  sourceName  String? // display origin name (e.g. "Trimble")
-  author      String?
-  externalId  String? // stable id from the source (dedup)
-  externalUrl String?
-  publishedAt DateTime?
-  ingestedAt  DateTime?
-  createdById String? // internal content author
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  sourceId      String?
+  sourceName    String? // display origin name (e.g. "Trimble")
+  author        String?
+  externalId    String? // stable id from the source (dedup)
+  externalUrl   String?
+  /// The publisher's own canonical URL when the feed declares one.
+  canonicalUrl  String?
+  /// Lower-cased, tracking-parameter-stripped form of the canonical/external URL.
+  /// The dedup key: the same article re-polled, or syndicated on two feed paths,
+  /// collapses here. Deliberately scoped PER SOURCE — two publishers covering the
+  /// same story are two articles, not one (ADR-0026).
+  normalizedUrl String?
+  publishedAt   DateTime?
+  ingestedAt    DateTime?
+  // --- AXIS EDITORIAL COPY (ADR-0026) ---
+  // Kept strictly apart from the mirrored source metadata above. Staff write these;
+  // a re-ingestion refreshes the source fields and must NEVER touch these.
+  axisHeadline  String?
+  axisSummary   String?
+  ctaLabel      String?
+  ctaUrl        String?
+  /// Internal note for colleagues. Never rendered into an email.
+  internalNote  String?
+  reviewedAt    DateTime?
+  reviewedById  String?
+  createdById   String? // internal content author
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 
   source        ContentSource?        @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  reviewedBy    User?                 @relation("ContentReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   campaignLinks CampaignContentItem[]
 
   @@unique([sourceId, externalId]) // idempotent external ingestion where both present
+  @@unique([sourceId, normalizedUrl]) // same article, same source, one row
   @@index([reviewState])
   @@index([origin])
   @@index([language])
@@ -641,17 +768,36 @@ model CampaignContentItem {
 
 // Approved content sources (internal + external)
 model ContentSource {
-  id        String            @id @default(cuid())
-  name      String
-  kind      ContentSourceKind
-  baseUrl   String?
-  isEnabled Boolean           @default(true)
-  config    Json? // review/trust configuration (no secrets)
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+  id               String            @id @default(cuid())
+  name             String
+  kind             ContentSourceKind
+  /// Human-facing website for this source (display only — never fetched).
+  baseUrl          String?
+  /// The feed actually fetched. Validated as a PUBLIC http(s) URL before it is
+  /// stored and again immediately before every request (ADR-0026) — a stored row
+  /// is untrusted input, and DNS can change under a name that once looked safe.
+  feedUrl          String?
+  isEnabled        Boolean           @default(true)
+  /// Declared language of this source's articles. `UNKNOWN` unless a person set it;
+  /// never inferred from a domain, exactly as with communication language.
+  language         Language          @default(UNKNOWN)
+  /// Free-form staff labels for filtering the review inbox. Not a taxonomy.
+  categories       String[]          @default([])
+  config           Json? // review/trust configuration (no secrets)
+  /// When ingestion last ATTEMPTED this source, successful or not.
+  lastCheckedAt    DateTime?
+  /// When ingestion last SUCCEEDED. Kept apart from the above so a source that is
+  /// being polled but has been failing for a week is visible as exactly that.
+  lastSucceededAt  DateTime?
+  lastErrorMessage String? // friendly text; never a stack trace, never a URL secret
+  createdById      String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
+  createdBy     User?                        @relation("ContentSourceCreator", fields: [createdById], references: [id], onDelete: SetNull)
   items         ContentItem[]
   ingestionRuns ContentIngestionRun[]
+  automations   NewsletterAutomationSource[]
 
   @@index([kind])
   @@index([isEnabled])
@@ -669,6 +815,10 @@ model ContentIngestionRun {
   duplicateCount  Int                @default(0)
   errorCount      Int                @default(0)
   errorMessage    String?
+  /// Groups the per-source runs of ONE "check sources now" into a single batch, so
+  /// one failing source can be reported without failing the others (ADR-0026).
+  batchId         String?
+  triggeredById   String?
   createdAt       DateTime           @default(now())
 
   source ContentSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
@@ -692,13 +842,19 @@ model NewsletterAutomation {
   recurrence      Json? // optional structured recurrence (internal; never RRULE exposed to users)
   language        Language
   segmentId       String?
+  /// Upper bound on candidate articles considered for one draft. A newsletter that
+  /// silently grew to forty items would be nobody's intent.
+  maxItems        Int            @default(5)
+  /// Optional source category filter. Null means "any category".
+  category        String?
   nextScheduledAt DateTime?
   lastRunAt       DateTime?
   createdById     String
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  segment Segment?                  @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  segment Segment?                     @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  sources NewsletterAutomationSource[]
   runs    NewsletterAutomationRun[]
 
   @@index([isEnabled])
@@ -707,6 +863,23 @@ model NewsletterAutomation {
 }
 
 // One run per (automation, scheduled occurrence) — idempotent campaign generation
+/// Which approved sources an automation draws candidates from (ADR-0026).
+///
+/// An automation with no sources draws from every enabled source; naming sources
+/// narrows it. This is a selection of ALREADY-APPROVED sources — it can never
+/// introduce a URL of its own.
+model NewsletterAutomationSource {
+  automationId String
+  sourceId     String
+  createdAt    DateTime @default(now())
+
+  automation NewsletterAutomation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  source     ContentSource        @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@id([automationId, sourceId])
+  @@index([sourceId])
+}
+
 model NewsletterAutomationRun {
   id                  String              @id @default(cuid())
   automationId        String
@@ -716,6 +889,17 @@ model NewsletterAutomationRun {
   completedAt         DateTime?
   generatedCampaignId String?             @unique
   errorMessage        String?
+  // --- what the run actually saw, so "nothing happened" is explainable ---
+  /// Candidate articles the run considered.
+  itemsFound          Int                 @default(0)
+  /// Articles newly ingested during this run.
+  itemsNew            Int                 @default(0)
+  /// APPROVED articles actually attached to the draft. Unreviewed content is never
+  /// counted here, because it is never used (ADR-0026).
+  itemsUsed           Int                 @default(0)
+  /// Sources that failed during this run. A non-zero value with a created draft is
+  /// PARTIAL, not FAILED.
+  sourcesFailed       Int                 @default(0)
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
 
@@ -730,13 +914,30 @@ model NewsletterAutomationRun {
 // ============================================================================
 // Deduplicated production delivery ledger (one per campaign + normalized email)
 // ============================================================================
+/// ONE production delivery destination per (campaign, normalized email).
+///
+/// Rows are created ONLY from an approved, current `CampaignFinalAudience` — never
+/// from user input, a preview, or an arbitrary address (ADR-0024). `finalAudienceId`
+/// is required precisely so "where did this recipient come from?" always has an answer.
 model CampaignRecipient {
   id                     String                 @id @default(cuid())
   campaignId             String
+  /// The frozen audience this destination came from. Required: a recipient with no
+  /// provenance is a recipient nobody approved.
+  finalAudienceId        String
   normalizedEmail        String // [H] dedup key + immutable snapshot
   communicationAddressId String? // nav only
   intendedEmail          String // real chosen destination (audit)
   state                  CampaignRecipientState @default(PENDING)
+  /// Communication state captured when the ledger was prepared, so a later change is
+  /// visible as a change rather than silently rewriting what was approved.
+  languageAtPreparation  Language               @default(UNKNOWN)
+  consentAtPreparation   ConsentStatus          @default(UNKNOWN)
+  preparedById           String?
+  preparedAt             DateTime?
+  /// Set when a dispatch-time veto stopped this destination. Uses the same reason
+  /// vocabulary as audience exclusions — there is one eligibility vocabulary.
+  vetoReason             ExclusionReason?
   // claim / recovery
   attemptCount           Int                    @default(0)
   firstAttemptAt         DateTime?
@@ -754,13 +955,15 @@ model CampaignRecipient {
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
 
-  campaign Campaign                  @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  address  CommunicationAddress?     @relation(fields: [communicationAddressId], references: [id], onDelete: SetNull)
-  sources  CampaignRecipientSource[]
-  events   CampaignEvent[]
+  campaign      Campaign                  @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  finalAudience CampaignFinalAudience     @relation(fields: [finalAudienceId], references: [id], onDelete: Restrict)
+  address       CommunicationAddress?     @relation(fields: [communicationAddressId], references: [id], onDelete: SetNull)
+  sources       CampaignRecipientSource[]
+  events        CampaignEvent[]
 
   @@unique([campaignId, normalizedEmail]) // <-- prevents double delivery
   @@index([campaignId])
+  @@index([finalAudienceId])
   @@index([normalizedEmail])
   @@index([state])
 }
@@ -839,6 +1042,8 @@ model CampaignTestSend {
   simulatedSourceBoardId   String?
   simulatedSourceItemId    String?
   subjectSnapshot          String?
+  /// Which channel actually carried this attempt (ADR-0025).
+  channel                  SendChannel        @default(SAFE_TEST_GMAIL)
   state                    TestSendState      @default(QUEUED)
   providerMessageId        String?
   failureReason            String?
@@ -871,7 +1076,7 @@ model CampaignTestSend {
 /// re-rendered and re-hashed; any difference invalidates the approval. A client-side
 /// "approved=true" is never trusted.
 model CampaignTestApproval {
-  id                String    @id @default(cuid())
+  id                String      @id @default(cuid())
   campaignId        String
   contentHash       String // SHA-256 over the deterministic canonical payload
   subjectSnapshot   String
@@ -882,16 +1087,19 @@ model CampaignTestApproval {
   replyToEmail      String?
   senderName        String?
   toEmail           String
-  sendMode          SendMode  @default(TEST)
+  sendMode          SendMode    @default(TEST)
+  /// Which channel this approval authorises (ADR-0025). An approval for the Gmail
+  /// SAFE TEST can never authorise a Resend PROVIDER PILOT submission, or vice versa.
+  channel           SendChannel @default(SAFE_TEST_GMAIL)
   approvedById      String
-  approvedAt        DateTime  @default(now())
+  approvedAt        DateTime    @default(now())
   // Single-use: set when an attempt is created. A consumed approval can never authorize
   // a second submission.
   consumedAt        DateTime?
   // Superseded by a newer approval, or invalidated because the content changed.
   revokedAt         DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
 
   campaign   Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   approvedBy User              @relation("TestSendApprover", fields: [approvedById], references: [id], onDelete: Restrict)
@@ -952,14 +1160,29 @@ model CampaignFinalAudience {
   crmSyncRunId              String? // provenance of that sync
   destinationsTruncated     Boolean   @default(false)
   exclusionsTruncated       Boolean   @default(false)
+  /// Cheap fingerprint of every table that can move a person in or out of this
+  /// audience (ADR-0023 §readiness cost). When it still matches, the frozen snapshot
+  /// is provably current and the full re-resolution is skipped. Any mismatch — or an
+  /// empty value on a pre-existing row — forces a full re-resolution, so the
+  /// optimisation can only ever fail towards doing MORE work, never towards
+  /// reporting a stale audience as fresh.
+  resolutionWatermark       String    @default("")
+  /// One logical preparation per token. A double-clicked or retried request carries
+  /// the same token and collides on the UNIQUE index below, so it returns the
+  /// snapshot that already exists instead of freezing a second one. A later,
+  /// deliberate preparation sends a fresh token and is allowed.
+  preparationKey            String?
   createdById               String
   createdAt                 DateTime  @default(now())
 
   campaign     Campaign                           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  preparedBy   User                               @relation("FinalAudiencePreparer", fields: [createdById], references: [id], onDelete: Restrict)
   destinations CampaignFinalAudienceDestination[]
   exclusions   CampaignFinalAudienceExclusion[]
   approvals    CampaignProductionApproval[]
+  recipients   CampaignRecipient[] // Restrict — a prepared ledger protects its source
 
+  @@unique([campaignId, preparationKey]) // <-- idempotency guard (NULLs never collide)
   @@index([campaignId, createdAt])
   @@index([audienceHash])
 }
@@ -1096,6 +1319,65 @@ model Unsubscribe {
   @@unique([normalizedEmail, scope]) // idempotent effective state
   @@index([normalizedEmail])
   @@index([communicationAddressId])
+}
+
+/// The last domain-authentication state READ FROM THE PROVIDER (ADR-0025).
+///
+/// Readiness must never claim a domain is authenticated because local configuration
+/// says so. This row records what the provider actually reported, and when — so the
+/// admin screen and the readiness checklist can show provider truth without making a
+/// network call on every render, and can say plainly how old that truth is.
+///
+/// Contains no secret: DNS record values are public by definition.
+model ProviderDomainSnapshot {
+  id          String   @id @default(cuid())
+  /// "RESEND". A string rather than an enum so a second provider needs no migration.
+  provider    String
+  domain      String
+  /// The provider's own status verbatim (e.g. "verified", "pending", "not_started").
+  status      String
+  /// Derived per-mechanism state: VERIFIED / NOT_VERIFIED / UNKNOWN.
+  spf         String
+  dkim        String
+  /// The records AXIS must publish, exactly as the provider returned them.
+  records     Json
+  checkedAt   DateTime @default(now())
+  checkedById String?
+
+  @@unique([provider, domain])
+  @@index([checkedAt])
+}
+
+/// A capability to unsubscribe ONE address (ADR-0024).
+///
+/// The URL carries a 32-byte random secret; only its SHA-256 is stored here, exactly
+/// as a password would be. A database leak therefore yields no working links, and a
+/// tampered token simply matches nothing — there is no payload to forge because the
+/// token carries no data at all. Everything the endpoint needs is on this row.
+///
+/// No expiry: a newsletter may be read months later, and an unsubscribe link that has
+/// quietly stopped working is worse than no link.
+model UnsubscribeToken {
+  id                     String                  @id @default(cuid())
+  /// SHA-256 (hex) of the secret in the URL. The secret itself is never stored.
+  tokenHash              String                  @unique
+  /// The single address this token can act on. A token for A can never affect B.
+  normalizedEmail        String
+  communicationAddressId String?
+  /// Which newsletter carried the link, for the unsubscribe audit trail.
+  campaignId             String?
+  purpose                UnsubscribeTokenPurpose @default(PRODUCTION)
+  createdAt              DateTime                @default(now())
+  /// First successful use. Re-use is idempotent, not an error.
+  firstUsedAt            DateTime?
+  lastUsedAt             DateTime?
+  useCount               Int                     @default(0)
+  /// Set when a token must stop working (a mis-issued fixture, for example).
+  revokedAt              DateTime?
+
+  @@index([normalizedEmail])
+  @@index([campaignId])
+  @@index([purpose])
 }
 
 model Suppression {

@@ -7,6 +7,7 @@ import {
   toProductProjection,
 } from "../../domain/crm/crmProjection";
 import { CUSTOMER_COLUMNS, MONDAY_BOARDS } from "../../domain/crm/mondayColumns";
+import { Capability, requireCapability } from "../auth/session";
 import * as crm from "../db/repositories/crmRepository";
 import { getPrisma } from "../db/prisma";
 import { getCrmSource } from "../integrations/crm";
@@ -119,6 +120,9 @@ function emptySummary(boardId: string, boardName: string | null): BoardSyncSumma
  * then the catalogue, then owned products which reference all three.
  */
 export async function syncCrmFromMonday(): Promise<CrmSyncSummary> {
+  // Pulling the CRM is a staff action, not an anonymous one. Read-only towards
+  // Monday, but it rewrites the local projection, so it is gated like a mutation.
+  await requireCapability(Capability.RUN_CRM_SYNC);
   const startedAt = new Date();
   const source = getCrmSource();
 

@@ -1,6 +1,7 @@
 import { assertCampaignEditable } from "../../domain/content/contentValidation";
 import { Language } from "../../domain/types";
 
+import { Capability, requireCapability } from "../auth/session";
 import { getPrisma } from "../db/prisma";
 import { AudiencePreview, previewSegment } from "./segmentService";
 
@@ -43,6 +44,7 @@ export async function setCampaignSegment(
   campaignId: string,
   segmentId: string | null,
 ): Promise<void> {
+  await requireCapability(Capability.MANAGE_NEWSLETTERS);
   const prisma = getPrisma();
   const campaign = await prisma.campaign.findUnique({
     where: { id: campaignId },
@@ -145,6 +147,7 @@ export interface SnapshotResult {
 export async function snapshotCampaignAudience(
   campaignId: string,
 ): Promise<SnapshotResult> {
+  await requireCapability(Capability.MANAGE_NEWSLETTERS);
   const prisma = getPrisma();
   const campaign = await prisma.campaign.findUnique({
     where: { id: campaignId },

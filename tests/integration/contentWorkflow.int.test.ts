@@ -4,6 +4,12 @@ import { randomUUID } from "node:crypto";
 import { getPrisma } from "../../src/server/db/prisma";
 import * as contentService from "../../src/server/services/contentService";
 import * as newsletterService from "../../src/server/services/newsletterService";
+import {
+  actAs,
+  clearTestActor,
+  createTestUser,
+  type TestUser,
+} from "../support/actor";
 
 /**
  * Content + newsletter workflow against real PostgreSQL.
@@ -62,12 +68,23 @@ d("content and newsletter workflow", () => {
     return result.data;
   };
 
+  /** Every service call in this suite runs as a real, signed-in manager. */
+
+  let operator: TestUser;
+
+
   beforeAll(async () => {
+
+    operator = await createTestUser({ prefix: "content", role: "MANAGER" });
+
+    actAs(operator);
     prisma = getPrisma();
     await prisma.$connect();
   });
 
   afterAll(async () => {
+
+    clearTestActor();
     try {
       const byId = (ids: string[]) => ({ where: { id: { in: ids } } });
       await prisma.campaignContentItem.deleteMany({
@@ -80,7 +97,9 @@ d("content and newsletter workflow", () => {
     } finally {
       await prisma.$disconnect();
     }
-  });
+  
+    await getPrisma().user.deleteMany({ where: { id: operator.id } });
+});
 
   // ---------------------------------------------------------------- content
 

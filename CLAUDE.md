@@ -45,10 +45,12 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | Lint | **ESLint 9** (`eslint-config-next`) | Flat config in `eslint.config.mjs` |
 | Database | **PostgreSQL** | Relational integrity is a hard requirement |
 | ORM | **Prisma** | All schema changes via migrations — **no manual DDL** |
-| Auth | **Auth.js (NextAuth v5)** | Credentials for MVP; server-enforced RBAC |
+| Auth | **Auth.js (NextAuth v5)** `next-auth@5.0.0-beta.32` | Credentials only; JWT sessions; server-enforced RBAC (ADR-0023) |
+| Passwords | **Argon2id** via `@node-rs/argon2` | OWASP baseline; prebuilt native binding, `serverExternalPackages` |
 | Container | **Docker** | For Postgres locally, and app image later |
 | Email (TEST) | **Gmail SMTP** via `nodemailer` | `smtp.gmail.com:465`, implicit TLS, Google **App Password**; behind the `EmailProvider` port (ADR-0014). Replies go to `NEWSLETTER_REPLY_TO` (ADR-0019) |
-| Email (bulk, later) | **Provider via HTTP API** (e.g. Resend/Postmark/SES) | Behind the same port; **no bulk vendor SDK committed yet** |
+| Email (production) | **Resend** via the `resend` SDK | Behind the SEPARATE `ProductionEmailProvider` port (ADR-0024/0025). Sends as `newsletter@axis-gps.com`. `DisabledProductionEmailProvider` (whose `send()` **throws**) is still the fallback whenever configuration is incomplete; **customer delivery remains LOCKED** |
+| Public unsubscribe | **Opaque 32-byte token**, SHA-256 stored (ADR-0024) | `/unsubscribe/<token>`; GET confirms, POST records. Footer-only link, **no `List-Unsubscribe` header** |
 | CRM source | **Monday.com** (GraphQL API + webhooks) | **Source of truth**; platform is a **read-only projection** (ADR-0007) via a query-only `CrmSource` port — implemented in ADR-0017 |
 | Send safety | **Send-mode gate** (`TEST` default / `PRODUCTION`) | Server-side safe-send redirect; going live is an explicit admin action (ADR-0008) |
 | Email HTML | **One canonical renderer** in `domain/email` | Table-based + inline styles; preview and sender share it (ADR-0011). No email-template library |
@@ -56,9 +58,9 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | Media | **`MediaStore` port**; **Cloudinary** hosted, local disk fallback | Selected by `MEDIA_PROVIDER`; `CLOUDINARY_URL` is a **secret**; never in `public/`, never in PostgreSQL (ADR-0012/0016) |
 | Jobs | Deferred | In-process scheduling first; **Redis/BullMQ only when justified** (see ADR-0005) |
 
-**Not yet installed, and must not be added until its milestone has a concrete need:** Prisma,
-Auth.js, a Monday API client, any email vendor SDK, Redis, BullMQ, a component library. Adding one
-early is a defect.
+**Not yet installed, and must not be added until its milestone has a concrete need:** Redis, BullMQ,
+a component library. Adding one early is a defect. (Prisma, Auth.js, a Monday API client and the
+Resend SDK are now installed and in use — the last selected in ADR-0025.)
 
 ## Repository Structure
 
@@ -77,10 +79,15 @@ early is a defect.
 ├── src/
 │   ├── app/                  # Next.js App Router (routes, layouts, route handlers)
 │   ├── domain/               # Pure domain logic: types, enums, invariants, state machines (NO I/O)
+│   │   ├── auth/            # Password policy, capability matrix, credential parsing (ADR-0023)
+│   │   ├── delivery/        # Dispatch vetoes, delivery state machine, provider events (ADR-0024),
+│   │   │                     #   pilot allowlist + domain-auth interpretation (ADR-0025)
+│   │   ├── unsubscribe/     # Unsubscribe token + public-URL policy (ADR-0024)
 │   │   ├── campaign/         # Production approval hash + send-readiness evaluator (ADR-0022)
 │   │   └── segment/          # Segment rule catalogue + validation (ADR-0018)
 │   ├── server/               # Server-only: services, data access, integrations, auth
 │   │   ├── services/         # Use-cases / application layer (orchestrate domain + persistence)
+│   │   ├── auth/             # Auth.js wiring, Argon2id hashing, session DAL (ADR-0023)
 │   │   ├── db/               # Prisma client + repositories (added at DB milestone)
 │   │   ├── media/            # MediaStore port + local-disk implementation (dev)
 │   │   └── integrations/     # External adapters (Monday CRM, email provider, ingestion) behind interfaces
@@ -88,6 +95,7 @@ early is a defect.
 │   └── ui/                   # Reusable presentational components (RTL-aware)
 ├── prisma/                   # schema.prisma + migrations (added at DB milestone)
 ├── var/media/                # Local DEV image uploads — git-ignored, replaced by object storage
+├── src/proxy.ts              # Next 16 proxy (was `middleware`) — anonymous redirect to /login
 ├── .env.example              # Documented env vars — no secrets, committed
 └── eslint.config.mjs, tsconfig.json, next.config.ts, postcss.config.mjs
 ```
@@ -171,9 +179,22 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
   `CampaignRecipient`: that table means delivery happened or will, and writing to it early would
   make "was this sent?" unanswerable.
 - **Production customer sending is NOT implemented.** The readiness checklist's infrastructure check
-  is hard-wired `BLOCKED`, there is no send action or route handler for it, and
-  `sendReadinessService` imports no email provider. A test asserts the whole readiness code path
-  contains no mail-transport reference at all.
+  is hard-wired `BLOCKED`, there is no send action or route handler for it, and the only
+  `ProductionEmailProvider` implementation **throws** when asked to send — never a quiet no-op that
+  could be mistaken for a delivery. `PRODUCTION_DELIVERY_ENABLED` lives in the environment, not the
+  database, so no UI writes it and no role — including ADMIN — can flip it from a browser.
+- **A delivery ledger is preparation, not delivery (ADR-0024).** `CampaignRecipient.finalAudienceId`
+  is **required**: a destination with no approved provenance is one nobody authorized. Rows are
+  created `PENDING` by an explicit dry-run action that demands a signed-in actor, a NON-STALE final
+  audience, a VALID approval and satisfied four-eyes. No service function accepts an address, so
+  "send to this person as well" is unrepresentable.
+- **High-authority vetoes are re-read immediately before submission.** `decideDispatch` re-checks
+  unsubscribe, suppression, address validity, consent and language — an approved audience is a
+  statement about the past, and somebody may have opted out since. It uses the same
+  `ExclusionReason` vocabulary and can only ever REMOVE a recipient, never add one.
+- **`ACCEPTED` is not `DELIVERED`, and `UNCERTAIN` is never auto-retried.** Only a provider event
+  may claim delivery, and the state machine has no transition from `UNCERTAIN` back to `READY` or
+  `SENDING`, so no retry loop can duplicate a real customer email.
 - Dispatch is **idempotent per (campaign, contact)**: a unique send-ledger row prevents double
   delivery on retry — in **both** `TEST` and `PRODUCTION` modes.
 - All of the above is **enforced server-side**; UI restrictions alone are insufficient. A hard
@@ -302,10 +323,70 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 - **Unsubscribe stays exactly as it is: footer-only.** No `List-Unsubscribe` header, no
   `List-Unsubscribe-Post`, no Gmail one-click unsubscribe, and no unsubscribe control near the
   sender. Tests assert their absence, so adding them later must be a deliberate act.
+- **The FOOTER IS UNCHANGED by ADR-0024 — only the href moved.** One small link, same place, same
+  prominence. A production message carries a per-recipient token; a SAFE TEST or preview carries a
+  CONSTANT, inert token, because the ADR-0013 approval hash covers the HTML and a per-render token
+  would make every approval unmatched. The inert link unsubscribes nobody, so a test email can
+  never touch a customer.
+- The unsubscribe href obeys the SAME deliverability rule as images (ADR-0015): a URL that only
+  resolves on the sending machine falls back to the existing placeholder rather than shipping a
+  dead link.
 - **The email client's Reply button cannot be removed** — it belongs to Gmail/Outlook. What the
   platform controls is where the reply is addressed. The footer keeps the real contact address
   (`info@axis-gps.com`) as the way to reach AXIS, and the send panel states plainly that replies are
   not monitored.
+
+### Production provider, domain authentication & the internal pilot (ADR-0025)
+
+- **Resend is the production provider, behind the existing port.**
+  `server/integrations/email/resendProductionEmailProvider.ts` is the ONLY file that imports the
+  Resend SDK. Domain, services and UI depend on `ProductionEmailProvider`. The registry resolves to
+  Resend only when `PRODUCTION_EMAIL_PROVIDER=resend` **and** `RESEND_API_KEY` is present; anything
+  else falls back to `DisabledProductionEmailProvider`, which throws. A half-configured vendor must
+  degrade to "cannot send", never to "sends somewhere unexpected".
+- **Selecting a vendor is not enabling delivery.** `PRODUCTION_DELIVERY_ENABLED` stays `false`, is
+  read from the environment, is not in the database, and **no ADMIN UI can set it**.
+  `dispatchCampaign` refuses on that switch alone, before reading a single row, and deliberately
+  **never reads `PROVIDER_PILOT_ENABLED`** — enabling the pilot must grant nothing on that path.
+- **Accepted ≠ delivered, end to end.** A provider id means ACCEPTED. Resend's `email.sent` maps to
+  `ProviderEventType.ACCEPTED`, never to anything called "sent"; only `email.delivered` may produce
+  `DELIVERED`. A broken connection is `UNCERTAIN`, never `FAILED`, and is **never auto-retried**.
+- **Domain state is READ from the provider, never assumed.** `fetchDomainStatus` lists and reads; it
+  creates nothing, edits no DNS, sends nothing. The answer is stored as `ProviderDomainSnapshot` with
+  its timestamp, and "not checked" is displayed differently from "not verified".
+  `checkConfiguration()` stays network-free. **DMARC is always `UNKNOWN`** — AXIS publishes it, no
+  provider can confirm it, and this platform performs no DNS lookups. Guidance is staged
+  (`p=none` → `quarantine` → `reject`); **never start at `p=reject`**. A domain may publish exactly
+  **one** SPF record, so a provider include is MERGED before the terminal `all`, never duplicated.
+  DNS values are displayed, never invented and never applied.
+- **Webhooks are verified BEFORE the body is read.** `/api/webhooks/resend` reads the raw text (never
+  `request.json()` — re-serialising changes the signed bytes), verifies via the adapter, and only
+  then acts. Unverifiable ⇒ `401`, no state change, and a body containing **no** recipient, campaign
+  or reason. A verified duplicate returns `200` — anything else makes the provider retry forever.
+  De-duplication checks **both** `CampaignEvent` and `SuppressionEvent`, because an event about an
+  address with no ledger row writes only a suppression.
+- **The internal PROVIDER PILOT is one email to one hard-coded address.** Sender
+  `AXIS Advanced Mapping Solutions <newsletter@axis-gps.com>`, recipient `khaled-s@axis-gps.com`,
+  subject prefixed `[AXIS PROVIDER PILOT]` (idempotently). The audience is **unrepresentable**: no
+  `from`/`cc`/`bcc`/`replyTo` field exists and `to` is a single string. `assertSafePilotEnvelope`
+  **refuses — never trims** — arrays, comma/semicolon lists, control characters, any other recipient
+  and any other sender; it runs in the service **and again inside the adapter** before the network
+  call. Gated by `PROVIDER_PILOT_ENABLED` **and** a provider-verified domain. Approval is hash-bound
+  and single-use (`UNIQUE CampaignTestSend.approvalId`). It writes **no** `CampaignRecipient`,
+  `CampaignEvent` or `CampaignFinalAudience`. **A human triggers it** — no scheduler, no worker, and
+  no test may send one.
+- **Channels cannot substitute for one another.** `SendChannel` (`SAFE_TEST_GMAIL` |
+  `PROVIDER_PILOT`) is stored on `CampaignTestApproval` and `CampaignTestSend`, and every query is
+  scoped to it. **SAFE TEST must not call Resend; the pilot must not call Gmail** — asserted against
+  the source, not merely intended.
+- **The API key is never printed, logged, persisted, returned or committed.** `.env.local` only,
+  never `.env.example`, never a chat message. Provider errors are not echoed: they can carry the
+  request, and the request carries the key.
+- **Never expose the development machine to the internet** for webhooks — no port forwarding, no
+  tunnel. Deploy to an internal HTTPS host and set `PUBLIC_APP_URL`. Until then delivery events do
+  not arrive; that is reported, not hidden.
+- **Unsubscribe appearance is unchanged on this path too:** one small footer link. No
+  `List-Unsubscribe`, no `List-Unsubscribe-Post`, no Gmail one-click control.
 
 ### Contact consent / eligibility (never email the wrong person)
 
@@ -416,6 +497,14 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 - **Two audience concepts, never merged.** `CampaignAudienceSnapshot` is DRAFT planning: replaced on
   every recompute. `CampaignFinalAudience` is frozen at a moment, **written once and never
   updated**, and an approval points at one specific row.
+- **One logical preparation per intent (ADR-0023).** `@@unique([campaignId, preparationKey])` makes
+  a double click, a retried POST or five concurrent requests collapse into ONE snapshot; the losers
+  read the winner's figures back rather than assuming them. A later, deliberate preparation carries
+  a fresh token and still creates a new snapshot — append-only history is preserved, never weakened.
+- **Readiness skips the full re-resolution only when it is provably safe (ADR-0023).**
+  `resolutionWatermark` fingerprints every table the resolution reads. A match proves nothing
+  relevant changed; any mismatch, or an empty value on an older row, re-resolves in full. It is a
+  proof about INPUTS, never a cache of a conclusion, so it can only fail towards more work.
 - **Staleness is a comparison, not a stored flag.** Readiness always re-resolves the audience live,
   re-hashes it with `computeAudienceHash`, and compares. A CRM resync, a language or consent change,
   an unsubscribe, a suppression, an edited segment or a changed campaign language all move a hashed
@@ -428,11 +517,12 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   language, sender address, sender display name, reply-to, **final audience id and audience hash**.
   Everything is re-derived at readiness time; a client-supplied `approved=true` is never trusted.
   Preparing a new final audience revokes any open approval.
-- **Four-eyes is implemented and reported BLOCKED.** `evaluateFourEyes` requires an authenticated
-  approver, a MANAGER/ADMIN role, and `approverId !== createdById` — **administrators are not exempt
-  for a production send**. Because there is no sign-in yet, approvals record
-  `authenticatedActor = false` and the check reports BLOCKED. **Do not fake a second employee and do
-  not soften the rule**; real authentication (ADR-0003) is a hard prerequisite for production.
+- **Four-eyes is ENFORCED (ADR-0023).** `evaluateFourEyes` requires an authenticated approver, a
+  MANAGER/ADMIN role, and `approverId !== createdById` — **administrators are not exempt for a
+  production send**. `approveForProduction` derives the approver from the session and **refuses**
+  a self-approval; the disabled button is a courtesy, the service is the control. Approvals
+  record `authenticatedActor = true`; rows written before authentication existed keep `false` and
+  can never retroactively satisfy the rule. **Never fake a second employee and never soften this.**
 - **Readiness is one deterministic pure function** (`domain/campaign/sendReadiness.ts`) producing
   `READY` / `WARNING` / `BLOCKED` per check across CONTENT, AUDIENCE, COMMUNICATION, APPROVAL and
   INFRASTRUCTURE. The COMMUNICATION group **states** the unsubscribe/suppression/address/language
@@ -442,6 +532,41 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   (> 20,000 rows) is reported as a WARNING rather than hidden.
 - **Accounting addresses have no code path** and can never appear in an audience, eligible or
   excluded.
+
+### Public unsubscribe (ADR-0024)
+
+- **The token carries NO DATA.** 32 CSPRNG bytes, base64url; only its SHA-256 is stored, exactly
+  like a password. Everything the endpoint needs lives on the row it matches, so there is no
+  payload to forge, no identifier to read, and a modified token resolves to nothing at all — never
+  to a different address. Never put an address id, contact id, company id, Monday id or email in
+  the URL.
+- **GET resolves and changes nothing; POST records.** Mail clients prefetch links and security
+  appliances open every URL in a message. The confirmation step is ACCIDENT-SAFETY, not CSRF
+  protection — there is no session to hijack, and anyone who can forge the request already holds
+  the token.
+- **Every failure is the same sentence.** Unknown, revoked, malformed and throttled all render
+  identically, and the page never displays the address it resolved. The endpoint must never become
+  an oracle for which addresses AXIS holds.
+- **Only INVALID attempts are throttled**, so a genuine recipient is never refused. No CAPTCHA.
+- Unsubscribe is **GLOBAL, append-only and idempotent** (`@@unique([normalizedEmail, scope])`).
+  It beats consent, language, segment and CRM source. The address, its profile and its provenance
+  are never deleted, and there is deliberately **no public re-subscribe**.
+- The audit row carries `actorUserId: null` and `actor: "PUBLIC_RECIPIENT"` — a recipient is not
+  an AXIS employee, and no colleague's name may be attached to what a customer did.
+- **`PUBLIC_APP_URL` is the only source of the link's origin.** Never the `Host` header, never the
+  LAN address the sender happened to use. HTTPS + a publicly-reachable host are required for
+  production; `http://localhost` is development-only and keeps production readiness BLOCKED.
+
+### Bounce & complaint handling (ADR-0024)
+
+- **Hard bounce** ⇒ suppress **and** set `emailStatus = INVALID` (the mailbox does not exist, and
+  staff must see the data-quality problem). **Complaint** ⇒ suppress and **do NOT** mark invalid —
+  the mailbox works, the person simply does not want the mail. **Soft bounce** ⇒ nothing.
+- Both suppressions **outrank a GRANTED consent**, and nothing may silently re-enable an address.
+- Ingestion is idempotent by `providerEventId`; every provider re-delivers webhooks.
+- **No public webhook route exists yet.** An endpoint accepting unsigned events would let anyone
+  suppress AXIS customers. Signature verification belongs to the vendor adapter, and the route
+  appears with the vendor.
 
 ### CRM data ownership & Monday sync (Monday is the source of truth)
 
@@ -544,9 +669,24 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 
 - **No secrets in the repo, ever.** All secrets come from environment variables. `.env` is
   git-ignored; **`.env.example` documents every variable with placeholder values** and is committed.
-- **Authentication:** Auth.js. All non-public routes/actions require a valid session.
-- **Authorization:** role-based (`ADMIN`, `MANAGER`), **enforced server-side** in services — not
-  merely by hiding UI. Approval/four-eyes and send permissions are checked on the server.
+- **Authentication (ADR-0023):** Auth.js v5, Credentials provider, JWT sessions. All non-public
+  routes/actions require a valid session. The **session DAL** (`server/auth/session.ts`) is the
+  security boundary: it re-reads the `User` row on every request, so a deactivation or a role
+  change takes effect on the next click. `src/proxy.ts` only redirects anonymous traffic early —
+  it checks for a cookie's existence and is **never** the guard.
+- **Passwords:** **Argon2id** only (`server/auth/password.ts`). Never plaintext, never reversible,
+  never logged, never returned to a client, never selected into a type that reaches the browser.
+  There is no `decrypt` and there must never be one.
+- **No public registration.** No sign-up page, action or route exists. Accounts are created only
+  at `/admin/users` by an `ADMIN`. The first administrator is created once at `/setup`, which
+  closes itself permanently — the gate is re-checked **inside** the creating transaction.
+- **Authorization:** one capability matrix in `domain/auth/authorization.ts`, **enforced
+  server-side** by `requireCapability` in every service — not merely by hiding UI. A service
+  never re-derives a rule from a role string. MANAGER runs the communication business; ADMIN
+  adds **exactly one** capability, `MANAGE_USERS`.
+- **The actor is always the session.** No service function takes an actor, approver or user id
+  as a parameter, and no parsed input shape has such a field, so a forged form value has nothing
+  to attach to. Deactivated and system accounts hold **no** capability whatever their role.
 - **Mass-mail protection** (see Domain Rules → Sending safety) is a security control, not just UX:
   the server-side `SEND_MODE` safe-send gate (`TEST` default), typed confirmation, live eligibility
   recompute, idempotent send ledger, and environment guard. Going to `PRODUCTION` is an explicit,
@@ -554,8 +694,10 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 - **Input validation** on every external boundary; treat **Monday API responses/webhooks**, provider
   webhooks, and optional CSV/Excel uploads as **untrusted**. Verify webhook signatures (Monday
   signing secret + challenge handshake; email-provider signatures) before processing.
-- **Public unsubscribe endpoint** must be safe for anonymous recipient use: no login, an unguessable
-  scoped token, no enumerable identifiers, rate-limited.
+- **Public unsubscribe endpoint** (implemented, ADR-0024): no login, an unguessable data-free token,
+  no enumerable identifiers, identical messages on every failure, and throttling that counts only
+  INVALID attempts so a real recipient is never blocked. `/unsubscribe` is listed public in
+  `src/proxy.ts` alongside `/login`, `/setup`, `/api/auth` and `/api/media`.
 - **Least privilege** for DB and provider credentials. Log security-relevant actions (auth,
   approvals, sends) to the audit trail.
 
@@ -594,6 +736,9 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   confirmation state that names the consequence and, for sending, the recipient count.
 - **Incomplete data is visible:** the UI must make incomplete contact profiles (missing email,
   language, industry, etc.) easy to spot; enrichment happens in Monday (the source of truth).
+- **Sign in / sign out:** `/login` is the only way in; the shell shows the signed-in person, their
+  role and a **Sign out** control on every page. Anonymous screens (`/login`, `/setup`) render
+  without navigation. A sign-in failure never reveals whether an address exists.
 - **UI-first operations:** normal users perform **all** operational workflows — CRM sync,
   segmentation, campaign building, approval, and sending — through the **application UI**.
   Terminal/CLI commands are for developers/infrastructure only and must never be a required step in a
@@ -606,6 +751,10 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   show a visible warning; in v1 this warns rather than blocks sending.
 - **Consent labels are the only form staff see:** "Not confirmed" / "Approved for communication" /
   "Do not send". Raw enum names never reach a screen, and neither do raw exclusion reason codes.
+- **Delivery infrastructure** is shown on the readiness page as facts, never assumptions: production
+  sender, domain authentication (SPF/DKIM/DMARC), public unsubscribe, production provider, and
+  production delivery — each READY or NOT READY. A dry-run ledger control is labelled
+  **"Prepare delivery records — NO EMAIL WILL BE SENT"** and rows read **PREPARED / NOT SENT**.
 - **Send readiness (`/newsletters/[id]/readiness`)** shows every check as READY / WARNING / BLOCKED,
   the full audience funnel, the exclusion breakdown, and inspectable lists of eligible addresses and
   exclusions. The production control is rendered **disabled** with the reason
@@ -639,6 +788,42 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   - a content, image, subject or audience change makes an approval **invalid**;
   - `CampaignRecipient` count stays **zero**, production stays **BLOCKED**, and the SAFE TEST
     workflow keeps working independently.
+- **Mandatory authentication tests (ADR-0023):**
+  - valid credentials succeed; a wrong password, an unknown address and a deactivated account all
+    fail, and the caller cannot tell them apart;
+  - a system account (the retired development stand-in) can never sign in or approve;
+  - passwords are Argon2id-hashed, salted, never stored in plaintext and never returned to a
+    client;
+  - an unauthenticated server action is refused;
+  - a MANAGER cannot administer users; an ADMIN can;
+  - the actor comes from the session and a browser-supplied actor id is ignored;
+  - a creator cannot approve their own campaign, **including an ADMIN**; a different
+    MANAGER/ADMIN can;
+  - a double click, a retry and five concurrent preparations yield ONE final audience;
+  - the readiness watermark changes for every security-relevant edit, and the shortcut never
+    bypasses a permission check.
+- **Mandatory unsubscribe & delivery tests (ADR-0024):**
+  - a modified, random or malformed token is refused and leaks nothing; A's token cannot
+    unsubscribe B;
+  - GET does not unsubscribe; a confirmed POST does; repeats are idempotent;
+  - an unsubscribe excludes the address immediately, beats GRANTED consent and a matching
+    language, makes the final audience STALE and the approval NOT READY;
+  - the SAFE TEST link unsubscribes nobody; the footer has exactly ONE link and no
+    `List-Unsubscribe` header is emitted;
+  - a recipient is unique per (campaign, normalized email), always references a final audience,
+    and can never be an accounting address;
+  - a stale audience, an invalid approval, a self-approval or missing four-eyes all BLOCK ledger
+    preparation;
+  - the dry run makes **zero** provider calls, the disabled adapter **throws**, `ACCEPTED` is
+    distinct from `DELIVERED`, and `UNCERTAIN` is never picked up again;
+  - a hard bounce suppresses and invalidates; a complaint suppresses without invalidating; the
+    same provider event ingests once; an unverifiable webhook is refused.
+- **Mandatory password-change tests (ADR-0024):** an administrator-issued password grants NO
+  capability, can still sign in, and is replaceable exactly once — after which the old password
+  fails, the new one works, the flag clears, and the audit row records the change without the
+  password.
+- **Integration suites sign in** through `tests/support/actor.ts`. `setActorForTesting` throws
+  outside the test runner — never route production identity through it.
 - A change to a domain invariant **must** come with tests. Do not claim success while tests fail —
   report failures exactly.
 

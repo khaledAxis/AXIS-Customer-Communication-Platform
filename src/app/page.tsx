@@ -3,6 +3,7 @@ import Link from "next/link";
 import { countContentByState } from "../server/services/contentService";
 import { countCampaignsByStatus } from "../server/services/newsletterService";
 import { Card, PageHeader, buttonPrimary, buttonSecondary } from "../ui/primitives";
+import { requirePage } from "../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,9 @@ export const dynamic = "force-dynamic";
  * Reads through services (never Prisma directly), per the layer rules.
  */
 export default async function DashboardPage() {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePage("/");
   const [contentCounts, campaignCounts] = await Promise.all([
     countContentByState(),
     countCampaignsByStatus(),

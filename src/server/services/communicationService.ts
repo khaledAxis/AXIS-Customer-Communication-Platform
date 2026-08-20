@@ -20,8 +20,8 @@ import {
   EmailStatus,
   Language,
 } from "../../domain/types";
+import { Capability, requireCapability } from "../auth/session";
 import { getPrisma } from "../db/prisma";
-import { getAuthoringUserId } from "./newsletterService";
 
 /**
  * Communication settings: the AXIS-owned, sync-immune profile per email address
@@ -391,6 +391,9 @@ export async function setLanguage(
   input: { language: unknown; addressIds: unknown },
   options: { batchId?: string | null } = {},
 ): Promise<LanguageChangeResult> {
+  // Server-side authorization, before any parsing or writing. The actor is derived
+  // from the session — never from the submitted form (ADR-0023).
+  const actor = await requireCapability(Capability.MANAGE_COMMUNICATION_LANGUAGE);
   const { language, addressIds } = parseLanguageAssignment(input);
   const prisma = getPrisma();
 
@@ -419,7 +422,7 @@ export async function setLanguage(
     };
   }
 
-  const actorUserId = await getAuthoringUserId();
+  const actorUserId = actor.id;
 
   await prisma.$transaction(async (tx) => {
     await tx.communicationAddress.updateMany({
@@ -530,6 +533,9 @@ export async function setConsent(
   input: ConsentAssignmentInput,
   options: { batchId?: string | null } = {},
 ): Promise<ConsentChangeResult> {
+  // Recording consent is the change that can lead to mail being sent, so the
+  // capability is checked before anything else happens.
+  const actor = await requireCapability(Capability.RECORD_CONSENT);
   const assignment = parseConsentAssignment(input);
   const prisma = getPrisma();
 
@@ -569,7 +575,7 @@ export async function setConsent(
     };
   }
 
-  const actorUserId = await getAuthoringUserId();
+  const actorUserId = actor.id;
   const recordedAt = new Date();
 
   await prisma.$transaction(async (tx) => {

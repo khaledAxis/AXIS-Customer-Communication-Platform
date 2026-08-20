@@ -17,10 +17,11 @@ import {
   renderNewsletterHtml,
   renderNewsletterText,
 } from "../../domain/email/newsletterTemplate";
+import { Capability, requireCapability } from "../auth/session";
 import { getPrisma } from "../db/prisma";
 import { getEmailProvider } from "../integrations/email";
 import { getSenderIdentity } from "../integrations/email/senderIdentity";
-import { getAuthoringUserId, getNewsletter, previewDocument } from "./newsletterService";
+import { getNewsletter, previewDocument } from "./newsletterService";
 
 /**
  * SAFE TEST send use-cases (ADR-0013, provider switched to Gmail SMTP by ADR-0014).
@@ -147,10 +148,16 @@ export interface TestSendStatus {
   } | null;
 }
 
-/** Most recent approval for a campaign (used or not). */
+/**
+ * Most recent SAFE TEST approval for a campaign (used or not).
+ *
+ * Scoped to the Gmail channel (ADR-0025). A provider-pilot approval lives in the same
+ * table and must never satisfy a Gmail submission — the two channels share storage,
+ * not authority.
+ */
 async function latestApproval(campaignId: string) {
   return getPrisma().campaignTestApproval.findFirst({
-    where: { campaignId },
+    where: { campaignId, channel: "SAFE_TEST_GMAIL" },
     orderBy: [{ approvedAt: "desc" }],
     include: { approvedBy: { select: { email: true } }, testSend: true },
   });
@@ -187,7 +194,7 @@ export async function getTestSendStatus(campaignId: string): Promise<TestSendSta
   );
 
   const lastSend = await getPrisma().campaignTestSend.findFirst({
-    where: { campaignId },
+    where: { campaignId, channel: "SAFE_TEST_GMAIL" },
     orderBy: [{ createdAt: "desc" }],
   });
 
@@ -270,19 +277,25 @@ export async function approveTestSend(campaignId: string): Promise<TestSendResul
     };
   }
 
-  const approvedById = await getAuthoringUserId();
+  const approvedById = (await requireCapability(Capability.SEND_TEST_EMAIL)).id;
   const prisma = getPrisma();
 
   await prisma.$transaction(async (tx) => {
     // Superseded: an older unused approval must not stay usable alongside a new one.
     await tx.campaignTestApproval.updateMany({
-      where: { campaignId, consumedAt: null, revokedAt: null },
+      where: {
+        campaignId,
+        channel: "SAFE_TEST_GMAIL",
+        consumedAt: null,
+        revokedAt: null,
+      },
       data: { revokedAt: new Date() },
     });
 
     const approval = await tx.campaignTestApproval.create({
       data: {
         campaignId,
+        channel: "SAFE_TEST_GMAIL",
         contentHash: rendered.contentHash,
         subjectSnapshot: rendered.subject,
         preheaderSnapshot: rendered.preheader,
@@ -320,7 +333,12 @@ export async function approveTestSend(campaignId: string): Promise<TestSendResul
 /** Explicit withdrawal of an approval (used by the UI's cancel action). */
 export async function revokeTestApprovals(campaignId: string): Promise<TestSendResult> {
   await getPrisma().campaignTestApproval.updateMany({
-    where: { campaignId, consumedAt: null, revokedAt: null },
+    where: {
+      campaignId,
+      channel: "SAFE_TEST_GMAIL",
+      consumedAt: null,
+      revokedAt: null,
+    },
     data: { revokedAt: new Date() },
   });
   return { ok: true, message: "Approval withdrawn." };
@@ -386,7 +404,7 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
   const toEmail = assertSafeTestEnvelope({ to: rendered.toEmail });
 
   const idempotencyKey = randomUUID();
-  const requestedById = await getAuthoringUserId();
+  const requestedById = (await requireCapability(Capability.SEND_TEST_EMAIL)).id;
 
   // ---- Claim the approval and write the durable attempt BEFORE calling the provider.
   // `CampaignTestSend.approvalId` is UNIQUE, so a concurrent or double-clicked request
@@ -405,6 +423,7 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
       const attempt = await tx.campaignTestSend.create({
         data: {
           campaignId,
+          channel: "SAFE_TEST_GMAIL",
           requestedById,
           approvalId: approval.id,
           idempotencyKey,

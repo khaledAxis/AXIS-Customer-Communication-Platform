@@ -9,6 +9,7 @@ import {
 import { formatDate } from "../../ui/labels";
 import { Badge, Card, EmptyState, PageHeader, buttonSubtle } from "../../ui/primitives";
 import { CrmSyncPanel } from "../../ui/CrmSyncPanel";
+import { Capability, requirePageCapability } from "../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,9 @@ export default async function CustomersPage({
 }: {
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.VIEW_CRM, "/customers");
   const params = await searchParams;
   const page = Number.parseInt(params.page ?? "1", 10) || 1;
 

@@ -6,6 +6,7 @@ import { ContentForm } from "../../../../ui/ContentForm";
 import { REVIEW_STATE_LABEL, REVIEW_STATE_TONE } from "../../../../ui/labels";
 import { Badge, PageHeader, buttonSubtle } from "../../../../ui/primitives";
 import { deleteContentAction, setReviewStateAction, updateContentAction } from "../../actions";
+import { Capability, requirePageCapability } from "../../../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,9 @@ export default async function EditContentPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ saved?: string }>;
 }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.MANAGE_CONTENT, "/content");
   const { id } = await params;
   const { saved } = await searchParams;
   const item = await getContent(id);

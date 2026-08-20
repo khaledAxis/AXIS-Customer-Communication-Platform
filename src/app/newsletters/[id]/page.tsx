@@ -30,10 +30,14 @@ import {
   snapshotAudienceAction,
   updateNewsletterAction,
 } from "../actions";
+import { Capability, requirePageCapability } from "../../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewsletterBuilderPage({ params }: { params: Promise<{ id: string }> }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.MANAGE_NEWSLETTERS, "/newsletters");
   const { id } = await params;
   const newsletter = await getNewsletter(id);
   if (!newsletter) notFound();

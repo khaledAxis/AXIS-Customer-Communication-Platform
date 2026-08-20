@@ -1,5 +1,6 @@
 # ADR-0003: Authentication & authorization with Auth.js + server-side RBAC
 
+- **Implemented by:** [ADR-0023](0023-authentication-and-four-eyes-enforcement.md)
 - **Status:** Accepted
 - **Date:** 2026-08-16
 - **Deciders:** Administrator/developer (architect)

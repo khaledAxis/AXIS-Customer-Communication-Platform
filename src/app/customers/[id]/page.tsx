@@ -5,6 +5,7 @@ import { getCommunicationState, getCustomer } from "../../../server/services/cus
 import { setCustomerLanguageAction } from "../actions";
 import { LANGUAGE_LABEL, formatDate } from "../../../ui/labels";
 import { Badge, Card, PageHeader, buttonSecondary, buttonSubtle } from "../../../ui/primitives";
+import { Capability, requirePageCapability } from "../../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,9 @@ function Row({ label, value, ltr = false }: { label: string; value: string | nul
 }
 
 export default async function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.VIEW_CRM, "/customers");
   const { id } = await params;
   const company = await getCustomer(id);
   if (!company) notFound();

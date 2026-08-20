@@ -50,6 +50,12 @@ export interface ProviderConfigStatus {
   senderEmail?: string;
 }
 
+/**
+ * Alias that names this port for what it is: the SAFE TEST transport. The production
+ * customer transport is a separate interface (`ProductionEmailProvider`, ADR-0024).
+ */
+export type SafeTestEmailProvider = EmailProvider;
+
 export interface EmailProvider {
   readonly name: EmailProviderName;
   /** Cheap, local check — must never call the provider's API. */

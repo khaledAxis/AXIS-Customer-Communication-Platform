@@ -19,10 +19,11 @@ import {
   testSendAvailability,
   testSendConfig,
 } from "../../domain/send/testSendPolicy";
+import { Capability, requireCapability } from "../auth/session";
 import { getSenderIdentity } from "../integrations/email/senderIdentity";
 import * as repo from "../db/repositories/campaignRepository";
-import { getPrisma } from "../db/prisma";
 import { getNewsletterBrand, getViewInBrowserUrl } from "./brandConfig";
+import { testUnsubscribeUrl } from "./unsubscribeService";
 
 /**
  * Newsletter use-cases (application layer).
@@ -37,27 +38,16 @@ function fail(errors: FieldError[]): { ok: false; errors: FieldError[] } {
 }
 
 /**
- * Development author stand-in.
+ * The authoring actor.
  *
- * `Campaign.createdById` is a required FK and authentication (Auth.js) is a later
- * milestone. Until then newsletters are attributed to a clearly-labelled local user
- * so the workflow is usable; this is replaced by the real session user, not extended.
+ * Replaces the pre-authentication development stand-in (ADR-0023). Identity comes
+ * from the signed-in session and nothing else: there is no parameter here, so a
+ * browser cannot name an author by adding a form field, and the capability is
+ * re-checked server-side on every call.
  */
-const DEV_USER_EMAIL = "dev-local@axis-gps.invalid";
-
 export async function getAuthoringUserId(): Promise<string> {
-  const prisma = getPrisma();
-  const existing = await prisma.user.findUnique({ where: { email: DEV_USER_EMAIL } });
-  if (existing) return existing.id;
-  const created = await prisma.user.create({
-    data: {
-      email: DEV_USER_EMAIL,
-      name: "Local development user",
-      role: "ADMIN",
-      passwordHash: "not-a-real-credential-auth-arrives-in-a-later-milestone",
-    },
-  });
-  return created.id;
+  const actor = await requireCapability(Capability.MANAGE_NEWSLETTERS);
+  return actor.id;
 }
 
 export interface NewsletterDetailsPayload {
@@ -236,8 +226,22 @@ export function buildNewsletterDocument(campaign: CampaignWithContent): Newslett
     items,
     brand: getNewsletterBrand(),
     viewInBrowserUrl: getViewInBrowserUrl(),
-    // Not yet functional — the tokenized public endpoint arrives with sending (ADR-0008).
-    unsubscribeUrl: null,
+    /**
+     * PREVIEW / SAFE TEST unsubscribe link (ADR-0024).
+     *
+     * A constant, inert URL — deliberately NOT a real token. Two reasons, both
+     * load-bearing:
+     *
+     *   1. The SAFE TEST approval hash covers the rendered HTML (ADR-0013). A freshly
+     *      minted token per render would change the HTML every time, so no approval
+     *      could ever match what was submitted.
+     *   2. An internal test email must be unable to unsubscribe a customer. This link
+     *      resolves to nothing at all and changes nothing when followed.
+     *
+     * A production message carries a real, single-recipient token minted at dispatch.
+     * The FOOTER IS IDENTICAL either way — only the href differs.
+     */
+    unsubscribeUrl: testUnsubscribeUrl(),
     isTestMode: campaign.sendMode === "TEST",
   };
 }

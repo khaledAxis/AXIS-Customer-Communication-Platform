@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 
 import type { ReadinessFormState } from "../app/newsletters/[id]/readinessActions";
 import { buttonPrimary, buttonSecondary, buttonSubtle } from "./primitives";
@@ -54,10 +54,28 @@ export function PrepareAudienceButton({
     message: "",
   });
 
+  /**
+   * One token per intent (ADR-0023 §concurrency).
+   *
+   * Generated when the button mounts and resent unchanged on a double click or a
+   * browser retry, so those collapse into ONE frozen snapshot. It is refreshed after
+   * a successful preparation, so a later deliberate press is a genuinely new
+   * preparation and is allowed to create a new snapshot.
+   */
+  const [token, setToken] = useState(() => crypto.randomUUID());
+  const lastMessage = useRef<string>("");
+  useEffect(() => {
+    if (state.ok && state.message !== "" && state.message !== lastMessage.current) {
+      lastMessage.current = state.message;
+      setToken(crypto.randomUUID());
+    }
+  }, [state.ok, state.message]);
+
   return (
     <div>
       <form action={formAction} className="flex flex-wrap items-center gap-3">
         <input type="hidden" name="campaignId" value={campaignId} />
+        <input type="hidden" name="preparationKey" value={token} />
         <button
           type="submit"
           className={hasExisting ? buttonSecondary : buttonPrimary}
@@ -178,6 +196,94 @@ export function ApproveProductionButtons({
 
       <Result state={approveState} />
       <Result state={revokeState} />
+    </div>
+  );
+}
+
+/**
+ * Prepares the production delivery ledger.
+ *
+ * Labelled unambiguously, because "prepare delivery records" is the closest thing on
+ * this screen to an action that could be mistaken for sending. It creates rows and
+ * makes no network call; the production provider that would transmit them refuses to
+ * send at all.
+ */
+export function PrepareLedgerButton({
+  campaignId,
+  action,
+  eligibleCount,
+  disabled,
+  blockedReason,
+}: {
+  campaignId: string;
+  action: Action;
+  eligibleCount: number;
+  disabled: boolean;
+  blockedReason: string | null;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [state, formAction, pending] = useActionState(action, {
+    ok: false,
+    message: "",
+  });
+
+  return (
+    <div>
+      <form action={formAction}>
+        <input type="hidden" name="campaignId" value={campaignId} />
+
+        {confirming ? (
+          <div className="rounded-lg border border-slate-300 bg-slate-50 p-3">
+            <p className="text-sm font-semibold text-slate-900">
+              Prepare {eligibleCount.toLocaleString()} delivery record
+              {eligibleCount === 1 ? "" : "s"} — NO EMAIL WILL BE SENT.
+            </p>
+            <p className="mt-1 text-xs text-slate-700">
+              This writes the ledger the future send would work from and re-checks
+              unsubscribe, blocked and address status right now. Anyone who opted out
+              since approval is recorded as suppressed and can never be submitted.
+              Production sending stays locked either way.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {/* Distinct keys: without them React reuses one DOM node and flips its
+                  `type` from button to submit mid-click, skipping the confirmation. */}
+              <button
+                key="confirm-prepare-ledger"
+                type="submit"
+                className={buttonSecondary}
+                disabled={pending}
+              >
+                {pending ? "Preparing…" : "Yes, prepare the records"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                className={buttonSubtle}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              key="request-prepare-ledger"
+              type="button"
+              onClick={() => setConfirming(true)}
+              className={buttonSecondary}
+              disabled={disabled}
+            >
+              Prepare delivery records — NO EMAIL WILL BE SENT
+            </button>
+            <span className="text-xs text-slate-600">
+              {disabled
+                ? (blockedReason ?? "Approve this newsletter first.")
+                : "Creates the delivery ledger. Makes no network call."}
+            </span>
+          </div>
+        )}
+      </form>
+      <Result state={state} />
     </div>
   );
 }

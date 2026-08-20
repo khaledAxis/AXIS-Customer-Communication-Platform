@@ -1,6 +1,7 @@
 # ADR-0004: Email provider behind an internal port; vendor deferred
 
-- **Status:** Accepted (vendor TBD)
+- **Status:** Accepted (vendor STILL TBD)
+- **Port shaped by:** [ADR-0024](0024-public-unsubscribe-and-production-delivery.md) — `ProductionEmailProvider` now exists as a separate interface from the SAFE TEST port, with exactly one implementation that refuses to send. The vendor decision remains open.
 - **Date:** 2026-08-16
 - **Deciders:** Administrator/developer (architect)
 

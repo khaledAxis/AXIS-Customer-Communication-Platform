@@ -15,6 +15,12 @@ import { FakeCrmSource } from "../../src/server/integrations/crm/fakeCrmSource";
 import { setCrmSourceForTesting } from "../../src/server/integrations/crm";
 import * as crmRepo from "../../src/server/db/repositories/crmRepository";
 import { syncCrmFromMonday } from "../../src/server/services/crmSyncService";
+import {
+  actAs,
+  clearTestActor,
+  createTestUser,
+  type TestUser,
+} from "../support/actor";
 
 /**
  * Read-only CRM sync against real PostgreSQL, with a FAKE Monday source.
@@ -92,7 +98,16 @@ d("read-only CRM synchronization", () => {
       },
     });
 
+  /** Every service call in this suite runs as a real, signed-in manager. */
+
+  let operator: TestUser;
+
+
   beforeAll(async () => {
+
+    operator = await createTestUser({ prefix: "crmsync", role: "MANAGER" });
+
+    actAs(operator);
     prisma = getPrisma();
     await prisma.$connect();
   });
@@ -100,6 +115,8 @@ d("read-only CRM synchronization", () => {
   beforeEach(() => install());
 
   afterAll(async () => {
+
+    clearTestActor();
     setCrmSourceForTesting(undefined);
     try {
       // Only rows this run created, in FK-safe order.
@@ -127,7 +144,9 @@ d("read-only CRM synchronization", () => {
     } finally {
       await prisma.$disconnect();
     }
-  });
+  
+    await getPrisma().user.deleteMany({ where: { id: operator.id } });
+});
 
   // ------------------------------------------------------------- companies
 
@@ -709,15 +728,21 @@ d("read-only CRM synchronization", () => {
 d("anti-mass-archival guard", () => {
   let prisma: ReturnType<typeof getPrisma>;
   const guardIds: string[] = [];
+  /** Syncing is a staff action now, so this block signs in too (ADR-0023). */
+  let guardOperator: TestUser;
 
   beforeAll(async () => {
     prisma = getPrisma();
     await prisma.$connect();
+    guardOperator = await createTestUser({ prefix: "crmguard", role: "MANAGER" });
+    actAs(guardOperator);
   });
 
   afterAll(async () => {
+    clearTestActor();
     setCrmSourceForTesting(undefined);
     await prisma.company.deleteMany({ where: { mondayItemId: { in: guardIds } } });
+    await prisma.user.deleteMany({ where: { id: guardOperator.id } });
     await prisma.$disconnect();
   });
 

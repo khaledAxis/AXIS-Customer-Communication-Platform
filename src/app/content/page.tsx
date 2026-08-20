@@ -18,6 +18,7 @@ import {
   buttonSubtle,
 } from "../../ui/primitives";
 import { setReviewStateAction } from "./actions";
+import { Capability, requirePageCapability } from "../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +40,9 @@ export default async function ContentPage({
 }: {
   searchParams: Promise<{ filter?: string; error?: string }>;
 }) {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.MANAGE_CONTENT, "/content");
   const params = await searchParams;
   const active = (FILTERS.find((f) => f.value === params.filter)?.value ?? "ALL") as ContentFilter;
   const items = await listContent(active);

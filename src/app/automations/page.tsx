@@ -1,8 +1,12 @@
 import Link from "next/link";
 
 import { Card, PageHeader, buttonSecondary } from "../../ui/primitives";
+import { Capability, requirePageCapability } from "../../server/auth/session";
 
-export default function AutomationsPage() {
+export default async function AutomationsPage() {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.MANAGE_NEWSLETTERS, "/automations");
   return (
     <>
       <PageHeader

@@ -2,10 +2,14 @@ import { countContentByState } from "../../server/services/contentService";
 import { countCampaignsByStatus } from "../../server/services/newsletterService";
 import { Card, PageHeader } from "../../ui/primitives";
 import { CAMPAIGN_STATUS_LABEL, REVIEW_STATE_LABEL } from "../../ui/labels";
+import { Capability, requirePageCapability } from "../../server/auth/session";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReportsPage() {
+  // Server-side gate. The proxy redirects anonymous traffic early; this is
+  // the check that actually decides, next to the data (ADR-0023).
+  await requirePageCapability(Capability.VIEW_CRM, "/reports");
   const [contentCounts, campaignCounts] = await Promise.all([
     countContentByState(),
     countCampaignsByStatus(),

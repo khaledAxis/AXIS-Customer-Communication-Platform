@@ -28,6 +28,9 @@ export async function getCampaign(id: string) {
         orderBy: [{ position: "asc" }],
         include: { contentItem: { include: { source: { select: { name: true } } } } },
       },
+      // Who prepared this newsletter, for the approval history. Never the password
+      // hash — only the fields a person is shown.
+      creator: { select: { id: true, email: true, name: true, isSystemAccount: true } },
       _count: { select: { recipients: true, events: true, testSends: true } },
     },
   });

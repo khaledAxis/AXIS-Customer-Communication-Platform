@@ -18,7 +18,6 @@ import { setConsent } from "../../src/server/services/communicationService";
 import {
   addContent,
   createNewsletter,
-  getAuthoringUserId,
   updateNewsletterDetails,
 } from "../../src/server/services/newsletterService";
 import { setCampaignSegment } from "../../src/server/services/campaignAudienceService";
@@ -34,6 +33,12 @@ import {
   approveTestSend,
   getTestSendStatus,
 } from "../../src/server/services/testSendService";
+import {
+  actAs,
+  clearTestActor,
+  createTestUser,
+  type TestUser,
+} from "../support/actor";
 
 /**
  * Send readiness against real PostgreSQL (ADR-0022).
@@ -94,8 +99,21 @@ d("send readiness", () => {
   let segmentId = "";
   let contentId = "";
 
+  /**
+   * Two real people (ADR-0023). `creator` prepares everything; `approver` is the
+   * second pair of eyes. They are separate `User` rows because four-eyes is only
+   * meaningful between identities that actually exist.
+   */
+  let creator: TestUser;
+  let approver: TestUser;
+  let adminCreator: TestUser;
+
   beforeAll(async () => {
     prisma = getPrisma();
+    creator = await createTestUser({ prefix: "rdy-creator", role: "MANAGER" });
+    approver = await createTestUser({ prefix: "rdy-approver", role: "MANAGER" });
+    adminCreator = await createTestUser({ prefix: "rdy-admin", role: "ADMIN" });
+    actAs(creator);
 
     const company = async (key: string, data: Record<string, unknown>) => {
       const row = await prisma.company.create({
@@ -201,6 +219,7 @@ d("send readiness", () => {
 
   afterAll(async () => {
     if (!HAS_DB) return;
+    clearTestActor();
     await prisma.campaignProductionApproval.deleteMany({
       where: { campaignId: { in: ids.campaigns } },
     });
@@ -241,11 +260,30 @@ d("send readiness", () => {
     await prisma.communicationAddress.deleteMany({
       where: { normalizedEmail: { in: ALL_EMAILS } },
     });
+    await prisma.user.deleteMany({
+      where: { id: { in: [creator.id, approver.id, adminCreator.id] } },
+    });
   });
 
   const statusOf = async (key: string, id = campaignId) => {
     const readiness = await getSendReadiness(id);
     return readiness?.readiness.checks.find((c) => c.key === key)?.status;
+  };
+
+  /**
+   * Approving as the second pair of eyes.
+   *
+   * The suite prepares everything as `creator`, so approving switches to `approver`
+   * and switches back — mirroring two people using the app, which is exactly what
+   * four-eyes requires.
+   */
+  const approveAsSecondPerson = async (id = campaignId) => {
+    actAs(approver);
+    try {
+      return await approveForProduction(id);
+    } finally {
+      actAs(creator);
+    }
   };
 
   /** Restores the fixture campaign to its known-good, freshly frozen state. */
@@ -299,7 +337,7 @@ d("send readiness", () => {
 
     // Approving is refused too: an approval that can never be valid is worse than none.
     await prepareFinalAudience(created.data.id);
-    const result = await approveForProduction(created.data.id);
+    const result = await approveAsSecondPerson(created.data.id);
     expect(result.ok).toBe(false);
   });
 
@@ -322,7 +360,7 @@ d("send readiness", () => {
     await prepareFinalAudience(created.data.id);
 
     expect(await statusOf("eligible", created.data.id)).toBe("BLOCKED");
-    const result = await approveForProduction(created.data.id);
+    const result = await approveAsSecondPerson(created.data.id);
     expect(result.ok).toBe(false);
   });
 
@@ -505,7 +543,7 @@ d("send readiness", () => {
 
   it("accepts an approval of the current newsletter and audience", async () => {
     await reset();
-    const result = await approveForProduction(campaignId);
+    const result = await approveAsSecondPerson();
     expect(result.ok).toBe(true);
 
     const readiness = await getSendReadiness(campaignId);
@@ -517,7 +555,7 @@ d("send readiness", () => {
 
   it("invalidates the approval when the content changes", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
 
     await prisma.contentItem.update({
       where: { id: contentId },
@@ -536,7 +574,7 @@ d("send readiness", () => {
 
   it("invalidates the approval when a picture changes", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
 
     await prisma.contentItem.update({
       where: { id: contentId },
@@ -549,7 +587,7 @@ d("send readiness", () => {
 
   it("invalidates the approval when the subject changes", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
 
     await updateNewsletterDetails(campaignId, {
       name: `${RUN} newsletter`,
@@ -564,7 +602,7 @@ d("send readiness", () => {
 
   it("invalidates the approval when the audience is frozen again", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
     expect((await getSendReadiness(campaignId))?.approval?.valid).toBe(true);
 
     await prepareFinalAudience(campaignId);
@@ -576,7 +614,7 @@ d("send readiness", () => {
 
   it("can be withdrawn by a person", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
     await revokeProductionApproval(campaignId);
 
     const readiness = await getSendReadiness(campaignId);
@@ -656,7 +694,7 @@ d("send readiness", () => {
 
   it("creates no delivery record for any campaign in this run", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
 
     expect(
       await prisma.campaignRecipient.count({
@@ -673,8 +711,22 @@ d("send readiness", () => {
         where: { campaignId: { in: ids.campaigns } },
       }),
     ).toBe(0);
-    // And none anywhere: this platform has never created a production recipient.
-    expect(await prisma.campaignRecipient.count()).toBe(0);
+    // Scoped to this run, like everything above it. Preparing a delivery LEDGER became
+    // possible in ADR-0024, and the delivery suite writes submitted-looking states BY
+    // HAND to exercise the state machine — so a global count would assert something
+    // this suite does not control. That nothing is ever really submitted is proven
+    // where it belongs: the production provider throws, and the dry run is asserted to
+    // make zero calls (tests/integration/delivery.int.test.ts).
+    expect(
+      await prisma.campaignRecipient.count({
+        where: {
+          campaignId: { in: ids.campaigns },
+          state: {
+            in: ["SENDING", "ACCEPTED", "DELIVERED", "SENT", "UNCERTAIN"],
+          },
+        },
+      }),
+    ).toBe(0);
   });
 
   it("has no mail transport in the readiness code path", async () => {
@@ -700,7 +752,7 @@ d("send readiness", () => {
 
   it("reports production sending as blocked no matter what is approved", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
 
     const readiness = await getSendReadiness(campaignId);
     expect(readiness?.productionEnabled).toBe(false);
@@ -712,29 +764,29 @@ d("send readiness", () => {
     );
   });
 
-  it("reports four-eyes as blocked while there is no sign-in", async () => {
+  it("satisfies four-eyes when a second real person approves", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
 
     const readiness = await getSendReadiness(campaignId);
-    expect(readiness?.fourEyes.satisfied).toBe(false);
-    expect(readiness?.fourEyes.problem).toContain("signed in");
-    expect(readiness?.approval?.authenticatedActor).toBe(false);
+    expect(readiness?.fourEyes.satisfied).toBe(true);
+    expect(readiness?.approval?.authenticatedActor).toBe(true);
+    expect(readiness?.approval?.approvedByEmail).toBe(approver.email);
 
-    // The creator and the approver really are the same local actor today.
-    const actor = await getAuthoringUserId();
+    // The campaign really was created by the other person.
     const campaign = await prisma.campaign.findUniqueOrThrow({
       where: { id: campaignId },
       select: { createdById: true },
     });
-    expect(campaign.createdById).toBe(actor);
+    expect(campaign.createdById).toBe(creator.id);
+    expect(campaign.createdById).not.toBe(approver.id);
   });
 
   // ---- 35 the safe test path is untouched ----------------------------------
 
   it("leaves the safe test workflow working and separate", async () => {
     await reset();
-    await approveForProduction(campaignId);
+    await approveAsSecondPerson();
 
     const status = await getTestSendStatus(campaignId);
     expect(status?.fromEmail).toBe(AUTHORIZED_TEST_SENDER);

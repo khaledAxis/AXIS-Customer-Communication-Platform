@@ -34,14 +34,23 @@ import {
   Language,
 } from "../../domain/types";
 import { AUTHORIZED_TEST_SENDER } from "../../domain/send/testSendPolicy";
+import { Role } from "../../domain/auth/authorization";
 
+import { Capability, getCurrentActor, requireCapability } from "../auth/session";
+import {
+  getProductionEmailProvider,
+  productionDeliveryEnabled,
+  productionSendingDomain,
+} from "../integrations/email";
+import {
+  RESEND_WEBHOOK_PATH,
+  readStoredDomainStatus,
+} from "./emailInfrastructureService";
+import { checkPublicUnsubscribeReadiness } from "./publicUrlConfig";
+import { computeAudienceWatermark } from "../db/repositories/audienceWatermark";
 import { getPrisma } from "../db/prisma";
 import { getSenderIdentity } from "../integrations/email/senderIdentity";
-import {
-  buildNewsletterDocument,
-  getAuthoringUserId,
-  getNewsletter,
-} from "./newsletterService";
+import { buildNewsletterDocument, getNewsletter } from "./newsletterService";
 import { resolveAudienceForDefinition } from "./segmentService";
 
 /**
@@ -57,6 +66,10 @@ import { resolveAudienceForDefinition } from "./segmentService";
  * It also does not implement a second eligibility engine: the audience comes from
  * `resolveAudienceForDefinition`, the same path the preview panel uses, which in turn
  * uses `domain/audience/resolveAudience` + `domain/eligibility` (CLAUDE.md).
+ *
+ * Since ADR-0023 every mutating function here derives its actor from the signed-in
+ * session and re-checks a capability. No function takes an actor, approver or user id
+ * as a parameter, so a forged form field has nothing to attach to.
  */
 
 /**
@@ -304,6 +317,8 @@ export interface PrepareResult {
   exclusionsStored: number;
   destinationsTruncated: boolean;
   exclusionsTruncated: boolean;
+  /** True when an identical request had already been recorded (double click, retry). */
+  deduplicated: boolean;
 }
 
 /**
@@ -318,8 +333,42 @@ export interface PrepareResult {
  */
 export async function prepareFinalAudience(
   campaignId: string,
+  /**
+   * Idempotency token for ONE logical preparation (ADR-0023 §concurrency).
+   *
+   * The browser generates it once per intent and resends it on a double click or a
+   * retried POST. It collides on `@@unique([campaignId, preparationKey])`, so the
+   * duplicate returns the snapshot that already exists instead of freezing a second
+   * one. A later, deliberate preparation carries a fresh token and is allowed —
+   * append-only history is preserved, not weakened.
+   *
+   * Omitting it is still supported (a server-side caller with no browser), and then
+   * the column is NULL, which never collides.
+   */
+  preparationKey?: string | null,
 ): Promise<PrepareResult> {
+  await requireCapability(Capability.PREPARE_FINAL_AUDIENCE);
+
   const prisma = getPrisma();
+
+  // Fast path: this exact request was already recorded. Returning the existing
+  // snapshot BEFORE resolving the audience is what makes a double click cheap as
+  // well as safe.
+  if (preparationKey) {
+    const already = await prisma.campaignFinalAudience.findUnique({
+      where: { campaignId_preparationKey: { campaignId, preparationKey } },
+      select: {
+        id: true,
+        uniqueDestinations: true,
+        excluded: true,
+        destinationsTruncated: true,
+        exclusionsTruncated: true,
+        _count: { select: { destinations: true, exclusions: true } },
+      },
+    });
+    if (already) return existingPreparation(already);
+  }
+
   const campaign = await prisma.campaign.findUnique({
     where: { id: campaignId },
     select: {
@@ -338,9 +387,11 @@ export async function prepareFinalAudience(
   const current = await resolveCurrentAudience(campaign);
   if (!current) throw new ReadinessError("Choose an audience segment first.");
 
-  const [freshness, createdById] = await Promise.all([
+  const actor = await requireCapability(Capability.PREPARE_FINAL_AUDIENCE);
+  const createdById = actor.id;
+  const [freshness, watermark] = await Promise.all([
     crmFreshness(),
-    getAuthoringUserId(),
+    computeAudienceWatermark(prisma, campaignId),
   ]);
 
   const destinations = current.destinations.slice(0, MAX_FINAL_DESTINATIONS);
@@ -374,6 +425,8 @@ export async function prepareFinalAudience(
         crmSyncRunId: freshness.syncRunId,
         destinationsTruncated,
         exclusionsTruncated,
+        resolutionWatermark: watermark,
+        preparationKey: preparationKey ?? null,
         createdById,
       },
       select: { id: true },
@@ -439,17 +492,63 @@ export async function prepareFinalAudience(
     });
 
     return audience.id;
+  }).catch(async (error) => {
+    // Lost a race on the idempotency key: five concurrent requests carrying the same
+    // token produce ONE snapshot, and the four that lose return the winner's.
+    if (preparationKey && isUniqueViolation(error)) {
+      const winner = await prisma.campaignFinalAudience.findUnique({
+        where: { campaignId_preparationKey: { campaignId, preparationKey } },
+        select: { id: true },
+      });
+      if (winner) return winner.id;
+    }
+    throw error;
   });
 
+  // A concurrent loser returns the winner's figures, read back rather than assumed.
+  const stored = await prisma.campaignFinalAudience.findUniqueOrThrow({
+    where: { id: finalAudienceId },
+    select: {
+      id: true,
+      uniqueDestinations: true,
+      excluded: true,
+      destinationsTruncated: true,
+      exclusionsTruncated: true,
+      _count: { select: { destinations: true, exclusions: true } },
+    },
+  });
+
+  return { ...existingPreparation(stored), deduplicated: false };
+}
+
+/** Shapes an already-stored snapshot as a preparation result. */
+function existingPreparation(row: {
+  id: string;
+  uniqueDestinations: number;
+  excluded: number;
+  destinationsTruncated: boolean;
+  exclusionsTruncated: boolean;
+  _count: { destinations: number; exclusions: number };
+}): PrepareResult {
   return {
-    finalAudienceId,
-    uniqueDestinations: current.uniqueDestinations,
-    excluded: current.excluded,
-    destinationsStored: destinations.length,
-    exclusionsStored: exclusions.length,
-    destinationsTruncated,
-    exclusionsTruncated,
+    finalAudienceId: row.id,
+    uniqueDestinations: row.uniqueDestinations,
+    excluded: row.excluded,
+    destinationsStored: row._count.destinations,
+    exclusionsStored: row._count.exclusions,
+    destinationsTruncated: row.destinationsTruncated,
+    exclusionsTruncated: row.exclusionsTruncated,
+    deduplicated: true,
   };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "P2002"
+  );
 }
 
 /** Newest CRM sync considered, for the freshness warning and snapshot provenance. */
@@ -521,13 +620,60 @@ export interface SendReadinessView {
     id: string;
     approvedAt: Date;
     approvedByEmail: string | null;
+    approvedByName: string | null;
     authenticatedActor: boolean;
     valid: boolean;
     problem: string | null;
   } | null;
+  /** Who prepared the newsletter and who froze the audience — shown as history. */
+  preparedBy: { email: string; name: string | null } | null;
+  audiencePreparedBy: { email: string; name: string | null } | null;
+  /** The signed-in person, so the UI can explain a four-eyes block precisely. */
+  viewer: { id: string; email: string; role: string } | null;
+  /** True when the viewer is the creator and therefore cannot approve. */
+  viewerIsCreator: boolean;
   fourEyes: { satisfied: boolean; problem: string | null };
+  /**
+   * True when the frozen audience was accepted without a full re-resolution because
+   * the cheap watermark still matched. Reported so the saving is visible rather than
+   * silent — see ADR-0023.
+   */
+  audienceVerifiedByWatermark: boolean;
   /** Always false in this milestone; the UI states why. */
   productionEnabled: boolean;
+  /**
+   * What still has to exist before a single customer message can go out (ADR-0024).
+   * Reported as facts, never as assumptions — an unverified domain reads as
+   * unverified.
+   */
+  deliveryInfrastructure: {
+    productionSender: string | null;
+    providerName: string;
+    providerConfigured: boolean;
+    deliveryEnabled: boolean;
+    domain: {
+      domain: string | null;
+      spf: string;
+      dkim: string;
+      dmarc: string;
+    };
+    publicUnsubscribe: {
+      configured: boolean;
+      productionReady: boolean;
+      origin: string | null;
+      problems: string[];
+    };
+    /** Whether provider delivery events can be verified and received (ADR-0025). */
+    webhook: {
+      secretConfigured: boolean;
+      /** Null until a public origin exists; a localhost URL is never reachable. */
+      url: string | null;
+      reachable: boolean;
+    };
+    /** When the domain state above was last read FROM the provider. Never inferred. */
+    domainCheckedAt: Date | null;
+    blockers: string[];
+  };
   sender: { fromEmail: string; senderName: string; replyToEmail: string };
   crmLastSyncedAt: Date | null;
 }
@@ -539,40 +685,75 @@ export async function getSendReadiness(
   const campaign = await getNewsletter(campaignId);
   if (!campaign) return null;
 
-  const [segment, frozen, approvalRow, freshness] = await Promise.all([
-    campaign.segmentId
-      ? prisma.segment.findUnique({
-          where: { id: campaign.segmentId },
-          select: { id: true, name: true, criteria: true },
-        })
-      : Promise.resolve(null),
-    prisma.campaignFinalAudience.findFirst({
-      where: { campaignId },
-      orderBy: [{ createdAt: "desc" }],
-      include: { _count: { select: { exclusions: true } } },
-    }),
-    prisma.campaignProductionApproval.findFirst({
-      where: { campaignId },
-      orderBy: [{ approvedAt: "desc" }],
-      include: { approvedBy: { select: { email: true } } },
-    }),
-    crmFreshness(),
-  ]);
+  const [segment, frozen, approvalRow, freshness, watermark, viewer] =
+    await Promise.all([
+      campaign.segmentId
+        ? prisma.segment.findUnique({
+            where: { id: campaign.segmentId },
+            select: { id: true, name: true, criteria: true },
+          })
+        : Promise.resolve(null),
+      prisma.campaignFinalAudience.findFirst({
+        where: { campaignId },
+        orderBy: [{ createdAt: "desc" }],
+        include: {
+          _count: { select: { exclusions: true } },
+          preparedBy: { select: { email: true, name: true } },
+        },
+      }),
+      prisma.campaignProductionApproval.findFirst({
+        where: { campaignId },
+        orderBy: [{ approvedAt: "desc" }],
+        include: { approvedBy: { select: { email: true, name: true, role: true } } },
+      }),
+      crmFreshness(),
+      computeAudienceWatermark(prisma, campaignId),
+      getCurrentActor(),
+    ]);
 
   const rendered = renderProduction(campaign);
 
-  // Always recompute. A frozen audience is only trustworthy against a fresh one.
-  const current = segment
-    ? await resolveCurrentAudience({
-        id: campaign.id,
-        language: campaign.language,
-        segmentId: campaign.segmentId,
-        segment,
-      })
+  // Delivery infrastructure. Read from the provider port and the public-URL config —
+  // never assumed, and never reported as ready because it "should" be.
+  // The domain snapshot is what the provider last reported; without it the adapter
+  // honestly says "not checked" rather than inferring verification from local config.
+  const domainSnapshot = await readStoredDomainStatus(productionSendingDomain());
+  const productionProvider =
+    getProductionEmailProvider(domainSnapshot.status).checkConfiguration();
+
+  const webhookSecretConfigured =
+    (process.env.RESEND_WEBHOOK_SECRET ?? "").trim() !== "";
+  const publicUnsubscribe = checkPublicUnsubscribeReadiness();
+  const webhookUrl = publicUnsubscribe.origin
+    ? `${publicUnsubscribe.origin}${RESEND_WEBHOOK_PATH}`
     : null;
 
+  // ---- audience: skip the expensive resolution only when it is provably safe ---
+  //
+  // The watermark covers every table the resolution reads. When it still matches the
+  // value stored with the snapshot, nothing that could move a person in or out has
+  // been written since — so the frozen result IS the current one. Any mismatch, and
+  // any snapshot predating the watermark column (empty string), re-resolves in full.
+  const watermarkMatches =
+    frozen !== null &&
+    frozen.resolutionWatermark !== "" &&
+    frozen.resolutionWatermark === watermark;
+
+  const current =
+    segment && !watermarkMatches
+      ? await resolveCurrentAudience({
+          id: campaign.id,
+          language: campaign.language,
+          segmentId: campaign.segmentId,
+          segment,
+        })
+      : null;
+
   let stalenessMessage: string | null = null;
-  if (frozen && current) {
+  if (frozen && watermarkMatches) {
+    // Provably current: nothing relevant changed since it was frozen.
+    stalenessMessage = null;
+  } else if (frozen && current) {
     const verdict = evaluateStaleness({
       frozen: {
         audienceHash: frozen.audienceHash,
@@ -641,12 +822,17 @@ export async function getSendReadiness(
         (check.reason ?? "NO_APPROVAL") as ProductionApprovalRejection
       ];
 
+  // Four-eyes against REAL identities (ADR-0023). `authenticated` is the flag the
+  // approval recorded at the time: an approval made before sign-in existed stays
+  // false forever, so historical rows can never retroactively satisfy the rule.
   const fourEyes = evaluateFourEyes({
     creatorId: campaign.createdById,
     approverId: approvalRow?.approvedById ?? null,
-    approverRole: null,
-    // Hard-wired false: there is no sign-in yet, so no approval can identify who
-    // approved. Reporting this as satisfied would be a lie about a safety control.
+    approverRole:
+      approvalRow?.approvedBy?.role === Role.ADMIN ||
+      approvalRow?.approvedBy?.role === Role.MANAGER
+        ? approvalRow.approvedBy.role
+        : null,
     authenticated: approvalRow?.authenticatedActor ?? false,
   });
 
@@ -730,22 +916,74 @@ export async function getSendReadiness(
           duplicateSourcesCollapsed: current.duplicateSourcesCollapsed,
           breakdown: current.breakdown as unknown as Record<string, number>,
         }
-      : null,
+      : frozen && watermarkMatches
+        ? {
+            // Not a guess: the watermark proved no relevant row changed, so the
+            // frozen figures ARE the live ones.
+            matchedCompanies: frozen.matchedCompanies,
+            matchedContacts: frozen.matchedContacts,
+            matchedRecords: frozen.matchedRecords,
+            uniqueDestinations: frozen.uniqueDestinations,
+            excluded: frozen.excluded,
+            duplicateSourcesCollapsed: frozen.duplicateSourcesCollapsed,
+            breakdown: (frozen.breakdown ?? {}) as Record<string, number>,
+          }
+        : null,
     approval: approvalRow
       ? {
           id: approvalRow.id,
           approvedAt: approvalRow.approvedAt,
           approvedByEmail: approvalRow.approvedBy?.email ?? null,
+          approvedByName: approvalRow.approvedBy?.name ?? null,
           authenticatedActor: approvalRow.authenticatedActor,
           valid: approvalValid,
           problem: approvalValid ? null : approvalProblem,
         }
       : null,
+    preparedBy: campaign.creator
+      ? { email: campaign.creator.email, name: campaign.creator.name }
+      : null,
+    audiencePreparedBy: frozen?.preparedBy
+      ? { email: frozen.preparedBy.email, name: frozen.preparedBy.name }
+      : null,
+    viewer: viewer ? { id: viewer.id, email: viewer.email, role: viewer.role } : null,
+    viewerIsCreator: viewer !== null && viewer.id === campaign.createdById,
     fourEyes: {
       satisfied: fourEyes.satisfied,
       problem: fourEyes.satisfied ? null : FOUR_EYES_MESSAGE[fourEyes.reason],
     },
-    productionEnabled: false,
+    audienceVerifiedByWatermark: watermarkMatches,
+    productionEnabled: productionDeliveryEnabled() && productionProvider.configured,
+    deliveryInfrastructure: {
+      productionSender: productionProvider.senderEmail,
+      providerName: productionProvider.name,
+      providerConfigured: productionProvider.configured,
+      deliveryEnabled: productionProvider.enabled,
+      domain: {
+        domain: productionProvider.domain.domain,
+        spf: productionProvider.domain.spf,
+        dkim: productionProvider.domain.dkim,
+        dmarc: productionProvider.domain.dmarc,
+      },
+      publicUnsubscribe,
+      webhook: {
+        secretConfigured: webhookSecretConfigured,
+        url: webhookUrl,
+        // A localhost URL is configured, not reachable. Resend cannot post to it, so
+        // bounces and complaints would never arrive — reported, not glossed over.
+        reachable: Boolean(webhookUrl && !webhookUrl.startsWith("http://localhost")),
+      },
+      domainCheckedAt: domainSnapshot.checkedAt,
+      blockers: [
+        ...productionProvider.problems,
+        ...publicUnsubscribe.problems,
+        ...(webhookSecretConfigured
+          ? []
+          : [
+              "No provider webhook secret is configured, so bounces and spam complaints cannot be received or verified.",
+            ]),
+      ],
+    },
     sender: {
       fromEmail: rendered.senderEmail,
       senderName: rendered.senderName,
@@ -776,10 +1014,34 @@ export type ApprovalActionResult =
 export async function approveForProduction(
   campaignId: string,
 ): Promise<ApprovalActionResult> {
+  // Identity and permission come from the session. There is no approver parameter,
+  // so a browser cannot nominate one (ADR-0023).
+  const approver = await requireCapability(Capability.APPROVE_PRODUCTION);
+
   const prisma = getPrisma();
   const campaign = await getNewsletter(campaignId);
   if (!campaign) {
     return { ok: false, reason: "NOT_FOUND", message: "That newsletter no longer exists." };
+  }
+
+  // FOUR-EYES, enforced here and not merely displayed. Administrators are NOT
+  // exempt: an administrator unblocking a stuck workflow is one thing, authorising a
+  // real customer send to themselves is another.
+  const fourEyes = evaluateFourEyes({
+    creatorId: campaign.createdById,
+    approverId: approver.id,
+    approverRole: approver.role,
+    authenticated: true,
+  });
+  if (!fourEyes.satisfied) {
+    return {
+      ok: false,
+      reason: fourEyes.reason,
+      message:
+        fourEyes.reason === "SAME_PERSON"
+          ? "A different authorized AXIS user must approve this campaign."
+          : FOUR_EYES_MESSAGE[fourEyes.reason],
+    };
   }
 
   const readiness = await getSendReadiness(campaignId);
@@ -836,7 +1098,7 @@ export async function approveForProduction(
     audienceHash: readiness.finalAudience.audienceHash,
   });
 
-  const approvedById = await getAuthoringUserId();
+  const approvedById = approver.id;
 
   await prisma.$transaction(async (tx) => {
     // Superseded: an older approval must not stay valid alongside a new one.
@@ -858,9 +1120,9 @@ export async function approveForProduction(
         senderName: rendered.senderName,
         replyToEmail: rendered.replyToEmail,
         approvedById,
-        // There is no sign-in yet, so this approval cannot prove who approved.
-        // Recording that honestly is what keeps four-eyes reported as BLOCKED.
-        authenticatedActor: false,
+        // A real signed-in person approved this. Historical rows keep `false`, so an
+        // approval made before authentication existed can never become valid.
+        authenticatedActor: true,
       },
       select: { id: true },
     });
@@ -877,7 +1139,8 @@ export async function approveForProduction(
           contentHash,
           finalAudienceId: readiness.finalAudience!.id,
           audienceHash: readiness.finalAudience!.audienceHash,
-          authenticatedActor: false,
+          authenticatedActor: true,
+          approverEmail: approver.email,
           // Approval is not delivery: nothing was sent and no recipient was created.
           sent: false,
         },
@@ -895,8 +1158,9 @@ export async function approveForProduction(
 export async function revokeProductionApproval(
   campaignId: string,
 ): Promise<ApprovalActionResult> {
+  const actor = await requireCapability(Capability.APPROVE_PRODUCTION);
   const prisma = getPrisma();
-  const actorUserId = await getAuthoringUserId();
+  const actorUserId = actor.id;
 
   const revoked = await prisma.campaignProductionApproval.updateMany({
     where: { campaignId, revokedAt: null },
@@ -957,6 +1221,8 @@ export async function inspectFinalAudience(
   campaignId: string,
   options: { view: "ELIGIBLE" | "EXCLUDED"; page?: number },
 ): Promise<AudienceInspection | null> {
+  // Reading who would receive a newsletter is customer data: it needs a session too.
+  await requireCapability(Capability.VIEW_CRM);
   const prisma = getPrisma();
   const frozen = await prisma.campaignFinalAudience.findFirst({
     where: { campaignId },
