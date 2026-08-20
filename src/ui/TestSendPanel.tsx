@@ -20,6 +20,8 @@ import { Card } from "./primitives";
 export interface TestSendPanelProps {
   campaignId: string;
   fromEmail: string;
+  senderName: string;
+  replyToEmail: string;
   toEmail: string;
   subject: string;
   canApprove: boolean;
@@ -65,9 +67,24 @@ export function TestSendPanel(props: TestSendPanelProps) {
       </p>
 
       <dl className="mt-4 space-y-3">
-        <AddressRow label="From" value={props.fromEmail} />
+        <div>
+          <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            From
+          </dt>
+          <dd className="mt-1 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+            <span className="font-semibold">{props.senderName}</span>
+            <br />
+            <span className="font-mono text-xs">{props.fromEmail}</span>
+          </dd>
+        </div>
+        <AddressRow label="Replies go to" value={props.replyToEmail} />
         <AddressRow label="To" value={props.toEmail} />
       </dl>
+
+      <p className="mt-3 text-xs text-slate-600">
+        Replies to this newsletter are not monitored. Customers who need help should
+        write to the contact address in the newsletter footer.
+      </p>
 
       <p className="mt-3 flex items-center gap-2 text-xs font-semibold text-emerald-700">
         <span aria-hidden>🔒</span> Authorised test recipient only
@@ -149,7 +166,8 @@ export function TestSendPanel(props: TestSendPanelProps) {
                 <span className="text-xs leading-relaxed text-slate-700">
                   I approve sending this exact newsletter as one TEST email from{" "}
                   <strong className="font-mono">{props.fromEmail}</strong> to{" "}
-                  <strong className="font-mono">{props.toEmail}</strong>.
+                  <strong className="font-mono">{props.toEmail}</strong>, with replies
+                  going to <strong className="font-mono">{props.replyToEmail}</strong>.
                 </span>
               </label>
 

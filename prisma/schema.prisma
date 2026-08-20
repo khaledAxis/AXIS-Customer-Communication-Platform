@@ -48,6 +48,16 @@ enum ConsentStatus {
   DENIED
 }
 
+/// Administrative basis recorded alongside a GRANTED consent (ADR-0021).
+/// Documentation of what a PERSON asserted — never a legal determination made by
+/// this software. Choosing an adequate basis is the operator's responsibility.
+enum ConsentSource {
+  EXISTING_CUSTOMER_RELATIONSHIP
+  EXPLICIT_CUSTOMER_PERMISSION
+  IMPORTED_DOCUMENTED_PERMISSION
+  OTHER_DOCUMENTED_BASIS
+}
+
 enum EmailStatus {
   UNKNOWN
   VALID
@@ -118,6 +128,10 @@ enum ExclusionReason {
   UNSUBSCRIBED
   SUPPRESSED
   CONSENT_DENIED
+  // Nobody refused, and nobody confirmed. Produced only when a caller asks for an
+  // explicit GRANTED consent (ADR-0021); the v1 default treats UNKNOWN as passable
+  // and reports the count instead of hiding it.
+  CONSENT_NOT_CONFIRMED
   COMPANY_INACTIVE
   ARCHIVED
   LANGUAGE_UNKNOWN
@@ -241,6 +255,16 @@ enum AuditAction {
   PRODUCTION_ENABLED
   UNSUBSCRIBE
   SUPPRESSION
+  // Local communication state changed by staff (ADR-0020). Language only in v1 —
+  // consent and suppression are deliberately NOT bulk-editable.
+  COMMUNICATION_LANGUAGE_CHANGED
+  // Local consent changed by staff (ADR-0021). Carries the recorded basis, the
+  // effective date, and the bulk batch id when part of one.
+  COMMUNICATION_CONSENT_CHANGED
+  // Send readiness (ADR-0022). None of these send anything.
+  FINAL_AUDIENCE_PREPARED
+  PRODUCTION_APPROVAL_RECORDED
+  PRODUCTION_APPROVAL_REVOKED
   CRM_SYNC
   ADMIN_CHANGE
 }
@@ -249,13 +273,22 @@ enum AuditAction {
 // Email-centric communication profile (LOCAL, sync-immune)
 // ============================================================================
 model CommunicationAddress {
-  id              String        @id @default(cuid())
-  normalizedEmail String        @unique // [S] globally-unique communication identity
-  emailStatus     EmailStatus   @default(UNKNOWN) // [L]
-  language        Language      @default(UNKNOWN) // [L] never inferred
-  consentStatus   ConsentStatus @default(UNKNOWN) // [L] never inferred
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                  String         @id @default(cuid())
+  normalizedEmail     String         @unique // [S] globally-unique communication identity
+  emailStatus         EmailStatus    @default(UNKNOWN) // [L]
+  language            Language       @default(UNKNOWN) // [L] never inferred
+  consentStatus       ConsentStatus  @default(UNKNOWN) // [L] never inferred
+  // --- consent evidence (ADR-0021), all [L] and all sync-immune ---
+  // Nullable because UNKNOWN and DENIED record no basis: refusing to send never
+  // needs paperwork. A GRANTED row always carries source + effectiveAt.
+  consentSource       ConsentSource? // [L] documented basis a person selected
+  consentNote         String? // [L] free-text description of that basis
+  consentEffectiveAt  DateTime? // [L] the date the permission applies from
+  consentRecordedAt   DateTime? // [L] when a person made the change here
+  consentRecordedById String? // [L] actor; nav only (no FK — actors outlive users)
+  consentBatchId      String? // [L] groups one bulk operation
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   recipients   CampaignRecipient[]
   unsubscribes Unsubscribe[]
@@ -264,6 +297,7 @@ model CommunicationAddress {
   @@index([emailStatus])
   @@index([language])
   @@index([consentStatus])
+  @@index([consentBatchId])
 }
 
 // ============================================================================
@@ -474,9 +508,10 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  createdCampaigns  Campaign[]             @relation("CampaignCreator")
-  approvedCampaigns Campaign[]             @relation("CampaignApprover")
-  testSendApprovals CampaignTestApproval[] @relation("TestSendApprover")
+  createdCampaigns    Campaign[]                   @relation("CampaignCreator")
+  approvedCampaigns   Campaign[]                   @relation("CampaignApprover")
+  testSendApprovals   CampaignTestApproval[]       @relation("TestSendApprover")
+  productionApprovals CampaignProductionApproval[] @relation("ProductionApprover")
 }
 
 model ContentItem {
@@ -556,17 +591,19 @@ model Campaign {
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
-  creator       User                        @relation("CampaignCreator", fields: [createdById], references: [id], onDelete: Restrict)
-  approver      User?                       @relation("CampaignApprover", fields: [approvedById], references: [id], onDelete: Restrict)
-  segment       Segment?                    @relation(fields: [segmentId], references: [id], onDelete: SetNull)
-  contentLinks  CampaignContentItem[] // ordered multi-content composition
-  recipients    CampaignRecipient[] // Restrict — history protected
-  events        CampaignEvent[] // Restrict — history protected
-  testSends     CampaignTestSend[] // Restrict — history protected
-  testApprovals CampaignTestApproval[] // Cascade — approvals are re-creatable, not history
-  snapshots     CampaignAudienceSnapshot[] // Cascade — re-derivable preview
-  exclusions    CampaignAudienceExclusion[] // Cascade — re-derivable preview
-  automationRun NewsletterAutomationRun? // set when generated by a recurring automation
+  creator             User                         @relation("CampaignCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  approver            User?                        @relation("CampaignApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+  segment             Segment?                     @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  contentLinks        CampaignContentItem[] // ordered multi-content composition
+  recipients          CampaignRecipient[] // Restrict — history protected
+  events              CampaignEvent[] // Restrict — history protected
+  testSends           CampaignTestSend[] // Restrict — history protected
+  testApprovals       CampaignTestApproval[] // Cascade — approvals are re-creatable, not history
+  snapshots           CampaignAudienceSnapshot[] // Cascade — re-derivable preview
+  exclusions          CampaignAudienceExclusion[] // Cascade — re-derivable preview
+  finalAudiences      CampaignFinalAudience[] // Cascade — frozen, append-only
+  productionApprovals CampaignProductionApproval[] // Cascade — re-approvable, not history
+  automationRun       NewsletterAutomationRun? // set when generated by a recurring automation
 
   @@index([status])
   @@index([scheduledAt])
@@ -795,6 +832,8 @@ model CampaignTestSend {
   campaignId               String
   requestedById            String
   fromEmail                String // axisgpscana@gmail.com (ADR-0014)
+  replyToEmail             String? // noreply@axis-gps.com (ADR-0019)
+  senderName               String? // "AXIS Advanced Mapping Solutions"
   toEmail                  String // khaled-s@axis-gps.com
   simulatedNormalizedEmail String?
   simulatedSourceBoardId   String?
@@ -838,6 +877,10 @@ model CampaignTestApproval {
   subjectSnapshot   String
   preheaderSnapshot String?
   fromEmail         String
+  // Where replies were directed when this was approved (ADR-0019). Nullable only for
+  // approvals created before the column existed; those can never be valid again.
+  replyToEmail      String?
+  senderName        String?
   toEmail           String
   sendMode          SendMode  @default(TEST)
   approvedById      String
@@ -857,6 +900,154 @@ model CampaignTestApproval {
   @@index([campaignId])
   @@index([contentHash])
   @@index([consumedAt])
+}
+
+// ============================================================================
+// FINAL send-time audience (ADR-0022) — append-only, immutable, still not delivery
+// ============================================================================
+//
+// `CampaignAudienceSnapshot` above is PLANNING: re-derivable, replaced whenever it is
+// recomputed. The three models below are the opposite — a frozen record of exactly
+// who a specific approval was granted against. They are written once and NEVER
+// updated: preparing the audience again creates a NEW `CampaignFinalAudience` row,
+// and the newest row is the current one. That is what makes "the snapshot used for
+// approval cannot change later" a property of the schema rather than a promise.
+//
+// Still not delivery: no `CampaignRecipient`, no `CampaignEvent`, no provider call.
+// A destination here is a frozen answer to "who would receive this", which is why it
+// is a separate table from the production ledger rather than an early write into it.
+
+model CampaignFinalAudience {
+  id                        String    @id @default(cuid())
+  campaignId                String
+  // Frozen copy of the audience definition. `segmentId` may later be repointed or the
+  // segment deleted; the rules that produced THIS audience stay readable regardless.
+  segmentId                 String?
+  segmentName               String
+  segmentCriteria           Json
+  // Campaign language at freeze time, and the language addresses had to match
+  // (null for a non-localized campaign).
+  campaignLanguage          Language
+  requireLanguage           Language?
+  // Whether an explicitly GRANTED consent was required (ADR-0021). False in v1.
+  requireExplicitConsent    Boolean   @default(false)
+  // ---- counts, all reported in the UI; nothing disappears silently ----
+  matchedCompanies          Int
+  matchedContacts           Int
+  matchedRecords            Int
+  withCandidateEmail        Int
+  eligible                  Int
+  uniqueDestinations        Int
+  excluded                  Int
+  duplicateSourcesCollapsed Int
+  consentGranted            Int       @default(0)
+  consentNotConfirmed       Int       @default(0)
+  breakdown                 Json // counts per ExclusionReason
+  // ---- staleness ----
+  // SHA-256 over the canonical audience payload (domain/audience/finalAudience.ts).
+  // Staleness is a comparison against a fresh resolution, never a stored flag that
+  // something has to remember to set.
+  audienceHash              String
+  crmLastSyncedAt           DateTime? // newest CRM sync considered, when known
+  crmSyncRunId              String? // provenance of that sync
+  destinationsTruncated     Boolean   @default(false)
+  exclusionsTruncated       Boolean   @default(false)
+  createdById               String
+  createdAt                 DateTime  @default(now())
+
+  campaign     Campaign                           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  destinations CampaignFinalAudienceDestination[]
+  exclusions   CampaignFinalAudienceExclusion[]
+  approvals    CampaignProductionApproval[]
+
+  @@index([campaignId, createdAt])
+  @@index([audienceHash])
+}
+
+/// One frozen deliverable destination. `sources` holds the contributing CRM records
+/// as immutable JSON: it is written once with the row and read back with it, never
+/// queried across snapshots, so a child table would add joins without adding safety.
+/// The accounting address has no code path anywhere and can never appear here.
+model CampaignFinalAudienceDestination {
+  id              String        @id @default(cuid())
+  finalAudienceId String
+  normalizedEmail String // [H] frozen dedup key
+  intendedEmail   String // [H] exact address chosen for delivery
+  language        Language
+  consentStatus   ConsentStatus
+  emailStatus     EmailStatus
+  sources         Json // [H] frozen provenance: board/item/kind/raw email/label
+  sourceCount     Int           @default(1)
+  createdAt       DateTime      @default(now())
+
+  finalAudience CampaignFinalAudience @relation(fields: [finalAudienceId], references: [id], onDelete: Cascade)
+
+  @@unique([finalAudienceId, normalizedEmail]) // one destination per email, frozen
+  @@index([finalAudienceId])
+  @@index([normalizedEmail])
+}
+
+/// Frozen exclusions for the same moment. Kept separate from
+/// `CampaignAudienceExclusion` (which is planning data and gets replaced) so an
+/// approved audience keeps its own explanation of who was left out and why.
+model CampaignFinalAudienceExclusion {
+  id               String          @id @default(cuid())
+  finalAudienceId  String
+  sourceBoardId    String
+  sourceItemId     String
+  sourceEntityType CrmBoardKind
+  emailSourceType  EmailSourceType
+  sourceEmailRaw   String?
+  normalizedEmail  String?
+  reason           ExclusionReason
+  label            String? // friendly CRM name at freeze time
+  createdAt        DateTime        @default(now())
+
+  finalAudience CampaignFinalAudience @relation(fields: [finalAudienceId], references: [id], onDelete: Cascade)
+
+  @@index([finalAudienceId])
+  @@index([finalAudienceId, reason])
+}
+
+/// Explicit human approval of ONE exact newsletter sent to ONE exact frozen audience
+/// (ADR-0022). Same philosophy as `CampaignTestApproval`, extended with the audience.
+///
+/// `contentHash` freezes subject, preheader, HTML, text, ordered content, image URLs,
+/// campaign language, sender identity, reply-to AND the final audience id + hash. At
+/// readiness time everything is re-derived and re-hashed; any difference invalidates
+/// the approval. A client-side "approved=true" is never trusted.
+///
+/// This row authorizes nothing on its own — production delivery does not exist yet.
+model CampaignProductionApproval {
+  id                 String    @id @default(cuid())
+  campaignId         String
+  finalAudienceId    String
+  contentHash        String // SHA-256 over the deterministic canonical payload
+  audienceHash       String // copy of the frozen audience hash, checked independently
+  subjectSnapshot    String
+  preheaderSnapshot  String?
+  campaignLanguage   Language
+  senderEmail        String
+  senderName         String
+  replyToEmail       String
+  approvedById       String
+  approvedAt         DateTime  @default(now())
+  /// False while the platform has no sign-in: every action is attributed to one
+  /// local development actor, so this approval cannot prove WHO approved. Four-eyes
+  /// is reported BLOCKED rather than quietly passing (ADR-0003 is still pending).
+  authenticatedActor Boolean   @default(false)
+  /// Superseded by a newer approval, or withdrawn by a person.
+  revokedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  campaign      Campaign              @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  finalAudience CampaignFinalAudience @relation(fields: [finalAudienceId], references: [id], onDelete: Restrict)
+  approvedBy    User                  @relation("ProductionApprover", fields: [approvedById], references: [id], onDelete: Restrict)
+
+  @@index([campaignId])
+  @@index([contentHash])
+  @@index([revokedAt])
 }
 
 // ============================================================================

@@ -4,6 +4,10 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import type { FieldError } from "../../domain/content/contentValidation";
+import {
+  setCampaignSegment,
+  snapshotCampaignAudience,
+} from "../../server/services/campaignAudienceService";
 import * as newsletterService from "../../server/services/newsletterService";
 
 /**
@@ -117,4 +121,30 @@ export async function deleteNewsletterAction(formData: FormData): Promise<void> 
     );
   }
   redirect("/newsletters");
+}
+
+/**
+ * Audience selection for a newsletter.
+ *
+ * Choosing or re-resolving an audience is analysis: it creates no delivery
+ * recipient and sends nothing. The service enforces that, and that the campaign
+ * is still editable.
+ */
+export async function setCampaignSegmentAction(formData: FormData): Promise<void> {
+  const campaignId = formData.get("campaignId");
+  const segmentId = formData.get("segmentId");
+  if (typeof campaignId !== "string") return;
+
+  const chosen =
+    typeof segmentId === "string" && segmentId !== "" ? segmentId : null;
+  await setCampaignSegment(campaignId, chosen);
+  revalidatePath(`/newsletters/${campaignId}`);
+}
+
+export async function snapshotAudienceAction(formData: FormData): Promise<void> {
+  const campaignId = formData.get("campaignId");
+  if (typeof campaignId !== "string") return;
+
+  await snapshotCampaignAudience(campaignId);
+  revalidatePath(`/newsletters/${campaignId}`);
 }

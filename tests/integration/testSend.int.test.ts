@@ -496,6 +496,102 @@ d("SAFE TEST send", () => {
     expect(preview!.document.subject.match(/\[AXIS TEST\]/g)).toHaveLength(1);
   });
 
+  // ---------------------------------------------------- no-reply behaviour
+
+  it("records the reply address on the approval and on the attempt", async () => {
+    install(new FakeEmailProvider());
+    const { campaignId } = await newSendableNewsletter();
+
+    await testSendService.approveTestSend(campaignId);
+    const approval = await prisma.campaignTestApproval.findFirst({ where: { campaignId } });
+    expect(approval?.replyToEmail).toBe("noreply@axis-gps.com");
+    expect(approval?.senderName).toBe("AXIS Advanced Mapping Solutions");
+
+    await testSendService.sendApprovedTestEmail(campaignId);
+    const attempt = await prisma.campaignTestSend.findFirst({ where: { campaignId } });
+    expect(attempt?.replyToEmail).toBe("noreply@axis-gps.com");
+    expect(attempt?.fromEmail).toBe("axisgpscana@gmail.com");
+    expect(attempt?.toEmail).toBe("khaled-s@axis-gps.com");
+  });
+
+  it("reports the sender identity in the send panel status", async () => {
+    install(new FakeEmailProvider());
+    const { campaignId } = await newSendableNewsletter();
+
+    const status = await testSendService.getTestSendStatus(campaignId);
+    expect(status?.fromEmail).toBe("axisgpscana@gmail.com");
+    expect(status?.senderName).toBe("AXIS Advanced Mapping Solutions");
+    expect(status?.replyToEmail).toBe("noreply@axis-gps.com");
+    expect(status?.toEmail).toBe("khaled-s@axis-gps.com");
+  });
+
+  it("invalidates an existing approval when the reply address changes", async () => {
+    install(new FakeEmailProvider());
+    const { campaignId } = await newSendableNewsletter();
+
+    await testSendService.approveTestSend(campaignId);
+    expect((await testSendService.getTestSendStatus(campaignId))?.canSend).toBe(true);
+
+    const previous = process.env.NEWSLETTER_REPLY_TO;
+    process.env.NEWSLETTER_REPLY_TO = "no-reply@axis-gps.com";
+    try {
+      const status = await testSendService.getTestSendStatus(campaignId);
+      expect(status?.canSend).toBe(false);
+      expect(status?.approval?.valid).toBe(false);
+
+      // ...and the send itself refuses, not just the UI.
+      const result = await testSendService.sendApprovedTestEmail(campaignId);
+      expect(result.ok).toBe(false);
+      expect(provider.callCount).toBe(0);
+
+      // Approving again under the new configuration restores the ability to send.
+      await testSendService.approveTestSend(campaignId);
+      const sent = await testSendService.sendApprovedTestEmail(campaignId);
+      expect(sent.ok).toBe(true);
+      const attempt = await prisma.campaignTestSend.findFirst({
+        where: { campaignId },
+        orderBy: [{ createdAt: "desc" }],
+      });
+      expect(attempt?.replyToEmail).toBe("no-reply@axis-gps.com");
+    } finally {
+      if (previous === undefined) delete process.env.NEWSLETTER_REPLY_TO;
+      else process.env.NEWSLETTER_REPLY_TO = previous;
+    }
+  });
+
+  it("keeps the footer unsubscribe and adds no List-Unsubscribe header", async () => {
+    install(new FakeEmailProvider());
+    const { campaignId } = await newSendableNewsletter();
+
+    const preview = await newsletterService.getNewsletterPreview(campaignId);
+    expect(preview?.html).toContain("mailto:info@axis-gps.com");
+    expect(preview?.html).not.toMatch(/list-unsubscribe/i);
+
+    await testSendService.approveTestSend(campaignId);
+    await testSendService.sendApprovedTestEmail(campaignId);
+
+    const submitted = provider.sent[0];
+    expect(submitted.html).not.toMatch(/list-unsubscribe/i);
+    // The message the provider receives carries no reply/cc/bcc field at all.
+    expect(Object.keys(submitted).sort()).toEqual(
+      ["html", "idempotencyKey", "subject", "text", "to"].sort(),
+    );
+  });
+
+  it("previewing repeatedly sends nothing and writes no send rows", async () => {
+    install(new FakeEmailProvider());
+    const { campaignId } = await newSendableNewsletter();
+
+    await newsletterService.getNewsletterPreview(campaignId);
+    await testSendService.renderTestEmail(campaignId);
+    await testSendService.getTestSendStatus(campaignId);
+
+    expect(provider.callCount).toBe(0);
+    expect(await prisma.campaignTestSend.count({ where: { campaignId } })).toBe(0);
+    expect(await prisma.campaignTestApproval.count({ where: { campaignId } })).toBe(0);
+    expect(await prisma.campaignRecipient.count({ where: { campaignId } })).toBe(0);
+  });
+
   it("counts pictures that will be OMITTED because they are only local", async () => {
     install(new FakeEmailProvider());
     const { campaignId } = await newSendableNewsletter();

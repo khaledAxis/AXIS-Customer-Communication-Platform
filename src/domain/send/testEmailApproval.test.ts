@@ -20,6 +20,8 @@ const matter = (overrides: Partial<ApprovalSubjectMatter> = {}): ApprovalSubject
   contentItemIds: ["a", "b", "c"],
   fromEmail: "axisgpscana@gmail.com",
   toEmail: "khaled-s@axis-gps.com",
+  replyToEmail: "noreply@axis-gps.com",
+  senderName: "AXIS Advanced Mapping Solutions",
   sendMode: "TEST",
   ...overrides,
 });
@@ -101,15 +103,45 @@ describe("canonical payload and hashing", () => {
   });
 });
 
+describe("reply-to is part of the approved message", () => {
+  it("changes the hash when the reply address changes", () => {
+    const before = computeApprovalHash(matter());
+    const after = computeApprovalHash(matter({ replyToEmail: "other@axis-gps.com" }));
+    expect(after).not.toBe(before);
+  });
+
+  it("changes the hash when the sender display name changes", () => {
+    const before = computeApprovalHash(matter());
+    const after = computeApprovalHash(matter({ senderName: "Someone Else" }));
+    expect(after).not.toBe(before);
+  });
+
+  it("is insensitive to reply-address case, as addresses are", () => {
+    expect(computeApprovalHash(matter({ replyToEmail: "NoReply@Axis-GPS.com" }))).toBe(
+      computeApprovalHash(matter({ replyToEmail: "noreply@axis-gps.com" })),
+    );
+  });
+
+  it("carries the reply address in the canonical payload", () => {
+    expect(canonicalApprovalPayload(matter())).toContain("replyToEmail:");
+    expect(canonicalApprovalPayload(matter())).toContain("noreply@axis-gps.com");
+  });
+});
+
 describe("approval re-validation", () => {
   const hash = computeApprovalHash(matter());
-  const expected = { fromEmail: "axisgpscana@gmail.com", toEmail: "khaled-s@axis-gps.com" };
+  const expected = {
+    fromEmail: "axisgpscana@gmail.com",
+    toEmail: "khaled-s@axis-gps.com",
+    replyToEmail: "noreply@axis-gps.com",
+  };
 
   const stored = (overrides: Partial<StoredApproval> = {}): StoredApproval => ({
     id: "appr_1",
     contentHash: hash,
     fromEmail: "axisgpscana@gmail.com",
     toEmail: "khaled-s@axis-gps.com",
+    replyToEmail: "noreply@axis-gps.com",
     sendMode: "TEST",
     consumedAt: null,
     revokedAt: null,
@@ -143,6 +175,20 @@ describe("approval re-validation", () => {
     expect(checkApproval(stored({ revokedAt: new Date() }), hash, expected)).toMatchObject({
       valid: false,
       reason: "REVOKED",
+    });
+  });
+
+  it("rejects an approval taken against a different reply address", () => {
+    // The configured NEWSLETTER_REPLY_TO changed after approval.
+    expect(
+      checkApproval(stored({ replyToEmail: "old-noreply@axis-gps.com" }), hash, expected),
+    ).toMatchObject({ valid: false, reason: "WRONG_REPLY_TO" });
+  });
+
+  it("rejects an approval that predates reply-to being recorded", () => {
+    expect(checkApproval(stored({ replyToEmail: null }), hash, expected)).toMatchObject({
+      valid: false,
+      reason: "WRONG_REPLY_TO",
     });
   });
 

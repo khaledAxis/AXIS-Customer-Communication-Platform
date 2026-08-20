@@ -1,11 +1,16 @@
 import nodemailer, { type Transporter } from "nodemailer";
 
 import {
+  NEWSLETTER_SENDER_NAME,
+  assertValidReplyTo,
+} from "../../../domain/send/replyTo";
+import {
   AUTHORIZED_TEST_RECIPIENT,
   AUTHORIZED_TEST_SENDER,
   assertSafeTestEnvelope,
   hasHeaderInjection,
 } from "../../../domain/send/testSendPolicy";
+import { getSenderIdentity } from "./senderIdentity";
 import type {
   EmailProvider,
   ProviderConfigStatus,
@@ -20,6 +25,10 @@ import type {
  * implicit TLS on port 465. The From mailbox comes from configuration and is asserted
  * against the authorized constant; callers cannot supply it.
  *
+ * Replies are directed to the centrally-configured no-reply address (ADR-0019). It is
+ * read here from configuration — never from the message — so no caller can redirect
+ * replies. No `List-Unsubscribe` header is emitted: unsubscribe stays footer-only.
+ *
  * The app password is never logged, returned, persisted, or included in any error.
  */
 
@@ -31,6 +40,9 @@ const SEND_TIMEOUT_MS = 30_000;
 interface SmtpConfig {
   user: string;
   pass: string;
+  /** Single centrally-configured reply destination. */
+  replyTo: string;
+  senderName: string;
 }
 
 /** Google shows app passwords as 4 groups of 4; users often paste them with spaces. */
@@ -44,8 +56,13 @@ function readConfig(): { config?: SmtpConfig; problems: string[] } {
   const pass = normalizeAppPassword(process.env.GMAIL_APP_PASSWORD ?? "");
   const declaredSender = (process.env.SAFE_TEST_SENDER ?? "").trim();
   const declaredRecipient = (process.env.SAFE_TEST_RECIPIENT ?? "").trim();
+  const identity = getSenderIdentity();
 
   const problems: string[] = [];
+
+  // A malformed reply address makes the provider unusable rather than silently
+  // sending with a fallback the approver never saw.
+  problems.push(...identity.problems);
 
   if (provider !== "gmail_smtp") {
     problems.push("EMAIL_PROVIDER must be gmail_smtp.");
@@ -78,7 +95,15 @@ function readConfig(): { config?: SmtpConfig; problems: string[] } {
   }
 
   if (problems.length > 0) return { problems };
-  return { config: { user, pass }, problems: [] };
+  return {
+    config: {
+      user,
+      pass,
+      replyTo: identity.replyToEmail,
+      senderName: identity.senderName,
+    },
+    problems: [],
+  };
 }
 
 interface SmtpErrorShape {
@@ -222,15 +247,32 @@ export class GmailSmtpEmailProvider implements EmailProvider {
       };
     }
 
+    // Last gate before the network: the configured reply address is re-validated
+    // here, independently of whatever the capability check concluded earlier.
+    let replyTo: string;
+    try {
+      replyTo = assertValidReplyTo(config.replyTo);
+    } catch {
+      return {
+        outcome: "FAILED",
+        failureCode: "INVALID_REPLY_TO",
+        message: "The configured reply address is not a single valid email address.",
+      };
+    }
+
     let info: { accepted?: unknown[]; rejected?: unknown[]; messageId?: string };
     try {
       info = await this.getTransporter(config).sendMail({
-        from: AUTHORIZED_TEST_SENDER, // never taken from caller input
+        // Display name + the authenticated mailbox. Never taken from caller input.
+        from: { name: config.senderName ?? NEWSLETTER_SENDER_NAME, address: AUTHORIZED_TEST_SENDER },
         to: recipient,
+        // Exactly one address, from central configuration — not from `message`.
+        replyTo,
         subject: message.subject,
         text: message.text,
         html: message.html,
-        // No cc, no bcc, no replyTo — the audience cannot widen.
+        // No cc and no bcc: the audience cannot widen.
+        // No List-Unsubscribe / List-Unsubscribe-Post: unsubscribe stays footer-only.
       });
     } catch (error) {
       const { outcome, failureCode, message: friendly } = classify((error ?? {}) as SmtpErrorShape);

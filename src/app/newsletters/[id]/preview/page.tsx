@@ -98,7 +98,20 @@ export default async function NewsletterPreviewPage({
             <dl className="mt-4 space-y-3 text-sm">
               <div>
                 <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">From</dt>
-                <dd className="mt-0.5 font-mono text-slate-900">{delivery.from}</dd>
+                <dd className="mt-0.5 text-slate-900">
+                  <span className="font-semibold">{delivery.senderName}</span>
+                  <br />
+                  <span className="font-mono text-xs">{delivery.from}</span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Replies go to
+                </dt>
+                <dd className="mt-0.5 font-mono text-slate-900">{delivery.replyTo}</dd>
+                <p className="mt-1 text-xs text-slate-500">
+                  Replies to this newsletter are not monitored.
+                </p>
               </div>
               <div>
                 <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subject</dt>
@@ -136,6 +149,8 @@ export default async function NewsletterPreviewPage({
             <TestSendPanel
               campaignId={id}
               fromEmail={testSend.fromEmail}
+              senderName={testSend.senderName}
+              replyToEmail={testSend.replyToEmail}
               toEmail={testSend.toEmail}
               subject={testSend.subject}
               canApprove={testSend.canApprove}

@@ -14,12 +14,36 @@ export const ConsentStatus = {
 } as const;
 export type ConsentStatus = (typeof ConsentStatus)[keyof typeof ConsentStatus];
 
+/**
+ * Administrative basis recorded next to a GRANTED consent (ADR-0021).
+ *
+ * These are documentation labels chosen by a person, NOT a legal determination made
+ * by the software. The platform records what a human asserted and who asserted it;
+ * whether that basis is adequate is the operator's responsibility.
+ */
+export const ConsentSource = {
+  EXISTING_CUSTOMER_RELATIONSHIP: "EXISTING_CUSTOMER_RELATIONSHIP",
+  EXPLICIT_CUSTOMER_PERMISSION: "EXPLICIT_CUSTOMER_PERMISSION",
+  IMPORTED_DOCUMENTED_PERMISSION: "IMPORTED_DOCUMENTED_PERMISSION",
+  OTHER_DOCUMENTED_BASIS: "OTHER_DOCUMENTED_BASIS",
+} as const;
+export type ConsentSource = (typeof ConsentSource)[keyof typeof ConsentSource];
+
 export const EmailStatus = {
   UNKNOWN: "UNKNOWN",
   VALID: "VALID",
   INVALID: "INVALID",
 } as const;
 export type EmailStatus = (typeof EmailStatus)[keyof typeof EmailStatus];
+
+export const CompanyCrmStatus = {
+  POTENTIAL: "POTENTIAL",
+  ACTIVE: "ACTIVE",
+  INACTIVE: "INACTIVE",
+  UNKNOWN: "UNKNOWN",
+} as const;
+export type CompanyCrmStatus =
+  (typeof CompanyCrmStatus)[keyof typeof CompanyCrmStatus];
 
 export const CrmBoardKind = {
   CUSTOMERS: "CUSTOMERS",
@@ -41,6 +65,11 @@ export const ExclusionReason = {
   UNSUBSCRIBED: "UNSUBSCRIBED",
   SUPPRESSED: "SUPPRESSED",
   CONSENT_DENIED: "CONSENT_DENIED",
+  /**
+   * Consent was never recorded, and the caller asked for explicit consent
+   * (ADR-0021). Distinct from CONSENT_DENIED: nobody refused, nobody confirmed.
+   */
+  CONSENT_NOT_CONFIRMED: "CONSENT_NOT_CONFIRMED",
   COMPANY_INACTIVE: "COMPANY_INACTIVE",
   ARCHIVED: "ARCHIVED",
   LANGUAGE_UNKNOWN: "LANGUAGE_UNKNOWN",

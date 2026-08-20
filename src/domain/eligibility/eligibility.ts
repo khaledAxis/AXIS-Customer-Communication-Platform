@@ -36,6 +36,16 @@ export interface EligibilityInput {
   companyInactive?: boolean;
   /** For a localized campaign: the required language. Omit for non-localized. */
   requireLanguage?: Language;
+  /**
+   * Require an explicitly GRANTED consent (ADR-0021).
+   *
+   * DEFAULT FALSE, which is the documented v1 rule: "consent is satisfied where
+   * applicable (consentStatus != DENIED)". UNKNOWN is therefore *not* a blocker by
+   * default — but it is never silently upgraded to GRANTED either, and readiness
+   * reports the unconfirmed count instead of hiding it. Turning this on tightens
+   * the rule; nothing in this module can loosen it.
+   */
+  requireExplicitConsent?: boolean;
 }
 
 export type EligibilityOutcome =
@@ -79,6 +89,12 @@ export function evaluateEligibility(input: EligibilityInput): EligibilityOutcome
   }
   if (profile.consentStatus === ConsentStatus.DENIED) {
     return { eligible: false, reason: ExclusionReason.CONSENT_DENIED };
+  }
+  if (
+    input.requireExplicitConsent === true &&
+    profile.consentStatus !== ConsentStatus.GRANTED
+  ) {
+    return { eligible: false, reason: ExclusionReason.CONSENT_NOT_CONFIRMED };
   }
   if (
     input.requireLanguage !== undefined &&

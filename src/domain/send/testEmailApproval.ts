@@ -37,6 +37,10 @@ export interface ApprovalSubjectMatter {
   contentItemIds: string[];
   fromEmail: string;
   toEmail: string;
+  /** Where replies are directed. Changing it changes the message the recipient gets. */
+  replyToEmail: string;
+  /** Display name shown in the inbox, part of the From header. */
+  senderName: string;
   sendMode: string;
 }
 
@@ -52,6 +56,8 @@ export function canonicalApprovalPayload(matter: ApprovalSubjectMatter): string 
     ["campaignId", matter.campaignId],
     ["sendMode", matter.sendMode],
     ["fromEmail", matter.fromEmail.trim().toLowerCase()],
+    ["senderName", matter.senderName],
+    ["replyToEmail", matter.replyToEmail.trim().toLowerCase()],
     ["toEmail", matter.toEmail.trim().toLowerCase()],
     ["subject", matter.subject],
     ["preheader", matter.preheader ?? ""],
@@ -75,6 +81,7 @@ export type ApprovalRejection =
   | "REVOKED"
   | "WRONG_SENDER"
   | "WRONG_RECIPIENT"
+  | "WRONG_REPLY_TO"
   | "NOT_TEST_MODE";
 
 export interface StoredApproval {
@@ -82,6 +89,8 @@ export interface StoredApproval {
   contentHash: string;
   fromEmail: string;
   toEmail: string;
+  /** Null for approvals created before reply-to was recorded (ADR-0019). */
+  replyToEmail: string | null;
   sendMode: string;
   consumedAt: Date | null;
   revokedAt: Date | null;
@@ -101,7 +110,7 @@ export interface ApprovalCheck {
 export function checkApproval(
   approval: StoredApproval | null,
   currentHash: string,
-  expected: { fromEmail: string; toEmail: string },
+  expected: { fromEmail: string; toEmail: string; replyToEmail: string },
 ): ApprovalCheck {
   if (!approval) return { valid: false, reason: "NO_APPROVAL" };
   if (approval.revokedAt !== null) return { valid: false, reason: "REVOKED" };
@@ -114,6 +123,13 @@ export function checkApproval(
   if (approval.toEmail.toLowerCase() !== expected.toEmail.toLowerCase()) {
     return { valid: false, reason: "WRONG_RECIPIENT" };
   }
+  // An approval predating this column, or one taken against a different configured
+  // reply-to, must not authorize a send whose replies would go elsewhere.
+  if (
+    (approval.replyToEmail ?? "").toLowerCase() !== expected.replyToEmail.toLowerCase()
+  ) {
+    return { valid: false, reason: "WRONG_REPLY_TO" };
+  }
   return { valid: true };
 }
 
@@ -125,5 +141,7 @@ export const APPROVAL_REJECTION_MESSAGE: Record<ApprovalRejection, string> = {
   REVOKED: "That approval is no longer valid. Please review and approve again.",
   WRONG_SENDER: "The approved sender does not match the authorised sender.",
   WRONG_RECIPIENT: "The approved recipient does not match the authorised recipient.",
+  WRONG_REPLY_TO:
+    "The reply address changed after approval. Please review and approve again.",
   NOT_TEST_MODE: "Test sending is only available in test mode.",
 };

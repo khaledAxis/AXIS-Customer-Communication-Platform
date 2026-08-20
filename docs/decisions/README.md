@@ -50,6 +50,12 @@ default awaiting confirmation from stakeholders.
 | [0014](0014-gmail-smtp-safe-test-send.md) | Gmail SMTP as the SAFE TEST transport | Accepted |
 | [0015](0015-newsletter-visual-redesign.md) | Editorial newsletter layout, bidi isolation & omission of non-deliverable images | Accepted |
 | [0016](0016-cloudinary-image-hosting.md) | Cloudinary as the newsletter image store | Accepted |
+| [0017](0017-monday-crm-read-only-sync.md) | Read-only Monday CRM synchronization (composite identity, create-only communication state, anti-mass-archival guard) | Accepted |
+| [0018](0018-segments-and-audience-resolution.md) | Segments, two-stage audience resolution & explainable exclusions | Accepted |
+| [0019](0019-no-reply-newsletter-behaviour.md) | No-reply Reply-To, AXIS sender display name & footer-only unsubscribe (unchanged) | Accepted |
+| [0020](0020-communication-language-assignment.md) | Staff-assigned communication language, bulk enrichment & never-inferred values | Accepted |
+| [0021](0021-communication-consent-management.md) | Staff-recorded communication consent, evidence requirements & bulk safeguards | Accepted |
+| [0022](0022-final-audience-and-send-readiness.md) | Immutable final audience, hash-bound production approval & the send-readiness checklist | Accepted |
 
 ---
 

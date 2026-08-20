@@ -18,6 +18,8 @@ const NAV = [
   { href: "/newsletters", label: "Newsletters", icon: "✉️" },
   { href: "/automations", label: "Automations", icon: "🔁" },
   { href: "/customers", label: "Customers", icon: "👥" },
+  { href: "/segments", label: "Audiences", icon: "🎯" },
+  { href: "/communication", label: "Communication", icon: "🌐" },
   { href: "/reports", label: "Reports", icon: "📊" },
 ] as const;
 

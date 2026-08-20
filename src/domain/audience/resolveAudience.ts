@@ -81,6 +81,8 @@ export interface AudienceResult {
 
 export interface ResolveOptions {
   requireLanguage?: Language;
+  /** Tighten consent to an explicit GRANTED (ADR-0021). Off by default. */
+  requireExplicitConsent?: boolean;
 }
 
 function emptyBreakdown(): Record<ExclusionReason, number> {
@@ -90,6 +92,7 @@ function emptyBreakdown(): Record<ExclusionReason, number> {
     UNSUBSCRIBED: 0,
     SUPPRESSED: 0,
     CONSENT_DENIED: 0,
+    CONSENT_NOT_CONFIRMED: 0,
     COMPANY_INACTIVE: 0,
     ARCHIVED: 0,
     LANGUAGE_UNKNOWN: 0,
@@ -124,6 +127,7 @@ export function resolveAudience(
       sourceArchived: c.sourceArchived,
       companyInactive: c.companyInactive,
       requireLanguage: opts.requireLanguage,
+      requireExplicitConsent: opts.requireExplicitConsent,
     });
 
     // "has a candidate email" = not the NO_EMAIL case

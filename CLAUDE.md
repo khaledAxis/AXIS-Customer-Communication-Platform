@@ -47,9 +47,9 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | ORM | **Prisma** | All schema changes via migrations — **no manual DDL** |
 | Auth | **Auth.js (NextAuth v5)** | Credentials for MVP; server-enforced RBAC |
 | Container | **Docker** | For Postgres locally, and app image later |
-| Email (TEST) | **Gmail SMTP** via `nodemailer` | `smtp.gmail.com:465`, implicit TLS, Google **App Password**; behind the `EmailProvider` port (ADR-0014) |
+| Email (TEST) | **Gmail SMTP** via `nodemailer` | `smtp.gmail.com:465`, implicit TLS, Google **App Password**; behind the `EmailProvider` port (ADR-0014). Replies go to `NEWSLETTER_REPLY_TO` (ADR-0019) |
 | Email (bulk, later) | **Provider via HTTP API** (e.g. Resend/Postmark/SES) | Behind the same port; **no bulk vendor SDK committed yet** |
-| CRM source | **Monday.com** (GraphQL API + webhooks) | **Source of truth** for CRM master data; platform is a **read-only projection** (ADR-0007) via a `CrmSource` port |
+| CRM source | **Monday.com** (GraphQL API + webhooks) | **Source of truth**; platform is a **read-only projection** (ADR-0007) via a query-only `CrmSource` port — implemented in ADR-0017 |
 | Send safety | **Send-mode gate** (`TEST` default / `PRODUCTION`) | Server-side safe-send redirect; going live is an explicit admin action (ADR-0008) |
 | Email HTML | **One canonical renderer** in `domain/email` | Table-based + inline styles; preview and sender share it (ADR-0011). No email-template library |
 | Rich text | **Restricted markup rendered server-side** | No stored client HTML; XSS-safe by construction. No WYSIWYG dependency (ADR-0012) |
@@ -77,6 +77,8 @@ early is a defect.
 ├── src/
 │   ├── app/                  # Next.js App Router (routes, layouts, route handlers)
 │   ├── domain/               # Pure domain logic: types, enums, invariants, state machines (NO I/O)
+│   │   ├── campaign/         # Production approval hash + send-readiness evaluator (ADR-0022)
+│   │   └── segment/          # Segment rule catalogue + validation (ADR-0018)
 │   ├── server/               # Server-only: services, data access, integrations, auth
 │   │   ├── services/         # Use-cases / application layer (orchestrate domain + persistence)
 │   │   ├── db/               # Prisma client + repositories (added at DB milestone)
@@ -158,6 +160,20 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
   `TEST` mode the confirmation states recipients are simulated/previewed and mail goes only to the
   safe-send address.
 - The recipient list is **recomputed at send time** from live eligibility — never a stale snapshot.
+- **A DRAFT audience snapshot is planning, not delivery (ADR-0018):** "Record this audience" writes
+  only `CampaignAudienceSnapshot` + `CampaignAudienceExclusion`, replaces any previous snapshot for
+  that campaign, and creates **no** `CampaignRecipient`/`CampaignEvent`. The authoritative send-time
+  snapshot and the delivery ledger belong to the send workflow.
+- **A FINAL audience snapshot is preparation, not delivery (ADR-0022):** "Prepare final audience"
+  writes only `CampaignFinalAudience` + `CampaignFinalAudienceDestination` +
+  `CampaignFinalAudienceExclusion`. These rows are **append-only and never updated** — preparing
+  again creates a NEW snapshot, and the newest is the current one. A destination is **not** a
+  `CampaignRecipient`: that table means delivery happened or will, and writing to it early would
+  make "was this sent?" unanswerable.
+- **Production customer sending is NOT implemented.** The readiness checklist's infrastructure check
+  is hard-wired `BLOCKED`, there is no send action or route handler for it, and
+  `sendReadinessService` imports no email provider. A test asserts the whole readiness code path
+  contains no mail-transport reference at all.
 - Dispatch is **idempotent per (campaign, contact)**: a unique send-ledger row prevents double
   delivery on retry — in **both** `TEST` and `PRODUCTION` modes.
 - All of the above is **enforced server-side**; UI restrictions alone are insufficient. A hard
@@ -233,11 +249,12 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 ### SAFE TEST sending via Gmail SMTP (ADR-0013 approval model + ADR-0014 transport)
 
 - **The audience is unrepresentable, not merely validated.** `TestEmailMessage` has **no `from`,
-  `cc`, `bcc` or `replyTo`**, and `to` is a single string. The sender is adapter configuration.
-  `assertSafeTestEnvelope` re-validates in the service **and** again inside the adapter, refusing
-  (never trimming) any attempt to widen the audience.
-- **Approval is bound to a SHA-256 of the exact rendered message** (campaign, mode, sender, recipient,
-  subject, preheader, ordered content, HTML, text). At send time the newsletter is **re-rendered and
+  `cc`, `bcc` or `replyTo`**, and `to` is a single string. The sender **and the reply address** are
+  adapter configuration, never message fields. `assertSafeTestEnvelope` re-validates in the service
+  **and** again inside the adapter, still refusing (never trimming) any caller-supplied `replyTo`,
+  `cc` or `bcc` — the audience cannot widen.
+- **Approval is bound to a SHA-256 of the exact rendered message** (campaign, mode, sender, sender
+  display name, reply address, recipient, subject, preheader, ordered content, HTML, text). At send time the newsletter is **re-rendered and
   re-hashed**; any difference blocks the send with *"Newsletter changed after approval…"*. A
   client-supplied `approved=true` is never trusted. Preview and send share `previewDocument`, so the
   reviewed and hashed messages are byte-identical.
@@ -264,6 +281,32 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
   (`docs/gmail-smtp-setup.md`). Gmail is a **test** transport; bulk customer sending still needs the
   ADR-0004 provider.
 
+### No-reply newsletter behaviour (ADR-0019)
+
+- **Replies go to a no-reply address, not to the sending mailbox.** Every newsletter carries
+  `Reply-To: noreply@axis-gps.com` (`NEWSLETTER_REPLY_TO`). The authenticated sender is unchanged —
+  Gmail sends as the account that signed in; only the reply destination moves.
+- **Central configuration, never per newsletter.** There is no UI input, no form field, and no
+  service parameter for it. `getSenderIdentity()` in `server/integrations/email` is the single
+  resolution point, read by BOTH the hashing service and the SMTP adapter, so what is approved and
+  what is sent cannot diverge. A caller-supplied `replyTo` is still refused outright.
+- **Validated for shape, and refused rather than repaired:** exactly one plain address — no array,
+  no comma/semicolon list, no `Name <addr>` form, no control character. Injection is checked on the
+  **raw** value before trimming, because trimming a trailing newline first would hide the attack. A
+  malformed value makes test sending **unavailable**; it never silently falls back.
+- **Reply-To and the sender display name are part of the approval hash.** Changing either
+  invalidates an existing approval — the user must preview, approve, and send again. A stored
+  approval also records `replyToEmail` as a second, independent gate.
+- **From shows `AXIS Advanced Mapping Solutions <axisgpscana@gmail.com>`.** The display name is a
+  constant and is injection-checked like an address.
+- **Unsubscribe stays exactly as it is: footer-only.** No `List-Unsubscribe` header, no
+  `List-Unsubscribe-Post`, no Gmail one-click unsubscribe, and no unsubscribe control near the
+  sender. Tests assert their absence, so adding them later must be a deliberate act.
+- **The email client's Reply button cannot be removed** — it belongs to Gmail/Outlook. What the
+  platform controls is where the reply is addressed. The footer keeps the real contact address
+  (`info@axis-gps.com`) as the way to reach AXIS, and the send panel states plainly that replies are
+  not monitored.
+
 ### Contact consent / eligibility (never email the wrong person)
 
 A contact is **email-eligible** only if **all** hold, re-checked at send time:
@@ -282,23 +325,123 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 - Unsubscribing must be honored across all campaigns immediately, via a **public, no-login,
   tokenized** unsubscribe endpoint (ADR-0008).
 
-### Segmentation
+### Segmentation (ADR-0018)
 
-- Segments select contacts by industry, product interests, brand interests, and tags.
-- Segment resolution to recipients is **separate** from eligibility filtering: resolve the segment,
-  then apply the eligibility filter. A contact in a segment but ineligible is **excluded from send**,
-  and this exclusion is visible/countable, not silent.
+- **A segment stores validated rules as JSON — never SQL, never executable code.** `Segment.criteria`
+  is re-parsed and re-validated on **every read** (a stored row is untrusted input). Only fields and
+  operators declared in `domain/segment/segmentFields.ts` exist, and only the Prisma clauses written
+  in `server/db/repositories/segmentQuery.ts` can be produced.
+- **v1 boolean shape is deliberately limited:** top level is always ALL; OR lives inside groups; one
+  level of nesting; **a group may not mix scopes** (company / contact / product / email settings).
+  Mixed-scope OR has no single clear meaning and is refused, not reinterpreted.
+- **Matching semantics:** company and product conditions select companies (AND-ed product conditions
+  must be satisfied by **one** owned product); contact conditions select contacts, which must also
+  belong to a matching company when company conditions exist; email-settings conditions filter the
+  resolved address. A segment chooses which address kinds to include — the **accounting address has
+  no code path** and can never be selected.
+- **Two stages, never collapsed:** CRM MATCHING → COMMUNICATION ELIGIBILITY. Resolution reuses
+  `domain/audience/resolveAudience` + `domain/eligibility` — there is exactly one eligibility engine.
+  A record may match a segment and still be excluded from delivery; both numbers are reported.
+- **Failing an email-settings condition is *not* an exclusion** — it means the record was never in
+  the segment. Exclusions are produced only by eligibility, only for records the segment selected.
+- **Every exclusion is explainable:** grouped by reason with a friendly label and a remedy, plus a
+  per-address list. Raw reason codes are never shown. Matched-company/contact counts are computed
+  **after** email-settings filtering — reporting "1,215 matched" for a segment that selects nobody is
+  true and misleading.
+- **Membership is dynamic:** a segment stores the definition, never a member list, and is re-resolved
+  on every preview and (later) at send time.
+- **A preview writes nothing** — no `CampaignRecipient`, no `CampaignEvent`, no provider call. A test
+  asserts the audience code contains no mail-transport reference at all.
+- Lookup conditions (classification, industry, product type) store the Monday **label**, not a
+  database id.
 - Contacts missing segmentation metadata are simply not matched by those criteria — they are not
   errors and must still exist and be enrichable.
 
-### Language
+### Language (assignment: ADR-0020)
 
 - Language is an explicit enum: **`HE`, `AR`, `UNKNOWN`**, held on **`CommunicationAddress`** (per
   normalized email), not on the contact. Missing language is **`UNKNOWN`**, never silently Hebrew and
   never inferred.
+- **Only a person sets it.** Monday has no language column, so every value is a deliberate human
+  action, made through `/communication` (or the customer page) and **audited** with
+  `COMMUNICATION_LANGUAGE_CHANGED` (from-state, to-state, actor, batch id for bulk).
+- **Never inferred** — not from a name, an email domain, a company, or CRM presence. A suggestion
+  mechanism is deliberately absent: the mirrored data carries no signal honest enough to base one on.
+- **The editable unit is the address, not the CRM record.** Several company/contact records commonly
+  share one address and therefore one profile; the UI shows every contributing record and says so.
+- **Language only.** The assignment path has no consent, `emailStatus`, unsubscribe or suppression
+  field anywhere in the parser, service or action — those cannot change here even by accident.
+  **Assigning a language never implies consent** (a legal decision, not a data-quality one).
+- Bulk changes are bounded (2,000 per operation) and require explicit confirmation naming the count.
 - A localized campaign targets a language. **Destinations whose `CommunicationAddress.language` is
   `UNKNOWN` are excluded** from a localized send unless an admin overrides for that campaign. Content
   and layout must render **RTL** for both Hebrew and Arabic.
+
+### Consent (assignment: ADR-0021)
+
+- Consent is an explicit enum: **`UNKNOWN`, `GRANTED`, `DENIED`**, held on
+  **`CommunicationAddress`** (per normalized email), locally owned and **sync-immune**. Monday has
+  no consent column, so every value is a deliberate human act.
+- **Never inferred** — not from a language, not from a name, not from a company, not from a CRM
+  record existing. **Assigning a language never implies consent**, and the two paths physically
+  cannot reach each other: `setLanguage`'s update payload holds `language` and nothing else,
+  `setConsent`'s holds consent + evidence and nothing else.
+- **`GRANTED` requires evidence; refusing does not.** Approving needs an explicit confirmation, a
+  documented **basis** (`ConsentSource`) and an **effective date** (never in the future);
+  `OTHER_DOCUMENTED_BASIS` additionally requires a note. `DENIED`/`UNKNOWN` need only the
+  confirmation — refusing to email someone is never the risky direction. Moving `DENIED → GRANTED`
+  therefore demands fresh evidence, and the basis is **cleared** when consent leaves `GRANTED`.
+- **Refused, not repaired:** an unrecognised basis is never mapped to "Other", a missing basis is
+  never defaulted, and an absent confirmation checkbox is never read as `true`.
+- **The labels are administrative metadata, not a legal determination.** The platform records what a
+  person asserted and who asserted it; choosing an adequate basis is the operator's responsibility,
+  and no UI text may suggest the software decided.
+- **`UNKNOWN` is preserved exactly as it was:** eligibility excludes only `DENIED`, so `UNKNOWN`
+  does not block a send — and is never silently upgraded to `GRANTED`. `evaluateEligibility` has an
+  **opt-in** `requireExplicitConsent` flag (default `false`) producing
+  `ExclusionReason.CONSENT_NOT_CONFIRMED`; readiness reports the unconfirmed count as a **WARNING**.
+  Turning it on for production needs its own ADR.
+- **Consent never overrides the stronger facts.** `GRANTED` + unsubscribed ⇒ **INELIGIBLE**. The
+  same holds for suppression, `emailStatus = INVALID`, archived sources and inactive companies. The
+  consent service cannot reach `Unsubscribe` or `Suppression` — they are not in its payload.
+- **Bulk is bounded and explicit:** ≤ 2,000 addresses per operation, no "grant consent to everyone"
+  control, nothing pre-selects all addresses, and approving asks twice with the count named
+  ("You are marking 47 communication addresses as approved for communication.").
+- Every change writes an append-only `AuditLog` row (`COMMUNICATION_CONSENT_CHANGED`) with
+  from-state, to-state, actor, basis, effective date, note and bulk batch id. Audit rows are never
+  updated — a later change adds a row.
+
+### Final audience & send readiness (ADR-0022)
+
+- **Two audience concepts, never merged.** `CampaignAudienceSnapshot` is DRAFT planning: replaced on
+  every recompute. `CampaignFinalAudience` is frozen at a moment, **written once and never
+  updated**, and an approval points at one specific row.
+- **Staleness is a comparison, not a stored flag.** Readiness always re-resolves the audience live,
+  re-hashes it with `computeAudienceHash`, and compares. A CRM resync, a language or consent change,
+  an unsubscribe, a suppression, an edited segment or a changed campaign language all move a hashed
+  input, so all of them make a snapshot stale automatically — nothing has to remember to invalidate
+  anything. A stale snapshot is **BLOCKED**, never a warning.
+- **Friendly CRM names are deliberately NOT hashed** — a company renamed in Monday must not
+  invalidate an approval, because the same people still receive the same email.
+- **Production approval extends the ADR-0013 model with the audience.** `CampaignProductionApproval`
+  binds a SHA-256 over subject, preheader, HTML, text, ordered content ids, image URLs, campaign
+  language, sender address, sender display name, reply-to, **final audience id and audience hash**.
+  Everything is re-derived at readiness time; a client-supplied `approved=true` is never trusted.
+  Preparing a new final audience revokes any open approval.
+- **Four-eyes is implemented and reported BLOCKED.** `evaluateFourEyes` requires an authenticated
+  approver, a MANAGER/ADMIN role, and `approverId !== createdById` — **administrators are not exempt
+  for a production send**. Because there is no sign-in yet, approvals record
+  `authenticatedActor = false` and the check reports BLOCKED. **Do not fake a second employee and do
+  not soften the rule**; real authentication (ADR-0003) is a hard prerequisite for production.
+- **Readiness is one deterministic pure function** (`domain/campaign/sendReadiness.ts`) producing
+  `READY` / `WARNING` / `BLOCKED` per check across CONTENT, AUDIENCE, COMMUNICATION, APPROVAL and
+  INFRASTRUCTURE. The COMMUNICATION group **states** the unsubscribe/suppression/address/language
+  posture rather than re-deriving it — a second eligibility engine is a defect.
+- **Nothing disappears silently.** Matched CRM records, unique addresses, duplicates collapsed,
+  eligible, excluded and a friendly reason per exclusion are all shown, and a truncated snapshot
+  (> 20,000 rows) is reported as a WARNING rather than hidden.
+- **Accounting addresses have no code path** and can never appear in an audience, eligible or
+  excluded.
 
 ### CRM data ownership & Monday sync (Monday is the source of truth)
 
@@ -314,11 +457,15 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
     `jobTitle`, `industry` (Company-level), category, customer status/classification, product links,
     plus provenance (`mondayBoardId`, `mondayItemId`, `mondayUpdatedAt`, `syncedAt`, `rawItem`, `source`).
   - **Locally-owned, email-centric on `CommunicationAddress` (one row per `normalizedEmail`) — a sync
-    must NEVER overwrite these:** `emailStatus`, **`language`**, `consentStatus`. (There is **no**
-    Monday language/consent field; both default `UNKNOWN`, never inferred.)
+    must NEVER overwrite these:** `emailStatus`, **`language`**, `consentStatus` and its evidence
+    (`consentSource`, `consentNote`, `consentEffectiveAt`, `consentRecordedAt`,
+    `consentRecordedById`, `consentBatchId`). (There is **no** Monday language/consent field; both
+    default `UNKNOWN`, never inferred.)
   - **Locally-owned, other:** `Unsubscribe`, `Suppression`/`SuppressionEvent`, `Campaign`,
     `CampaignRecipient`, `CampaignRecipientSource`, `CampaignEvent`, `CampaignTestSend`,
-    `CampaignAudienceSnapshot`/`Exclusion`, `AuditLog`, `Segment`, archive flags, send-mode config.
+    `CampaignAudienceSnapshot`/`Exclusion`, `CampaignFinalAudience` (+ its destinations and
+    exclusions), `CampaignProductionApproval`, `AuditLog`, `Segment`, archive flags, send-mode
+    config.
 - **Composite source identity `(mondayBoardId, mondayItemId)`** is the stable natural key for every
   mirrored record (unique). The local primary key stays a `cuid()`. **Email is never CRM identity**;
   the globally-unique communication identity is **`CommunicationAddress.normalizedEmail`**.
@@ -334,12 +481,21 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 - **Archive-on-delete:** a Monday item deletion **archives** the local projection (`status = ARCHIVED`
   + `mondayDeletedAt`) and makes it ineligible for sending. **Never hard-delete** a mirrored record,
   especially when campaign history exists.
+- **Anti-mass-archival guard (ADR-0017):** a truncated, filtered or failed Monday response is
+  indistinguishable from "everything was deleted". A sync that would archive more than **20% of a
+  board's currently active records** is **refused**: nothing is archived, the `SyncRun` is marked
+  `PARTIAL`, and the reason is recorded. The denominator is the **active** count — measuring against
+  all rows hides a catastrophic archival behind a small ratio. A board-level read failure marks the
+  run `FAILED` and archives **nothing**.
 - **Sync freshness:** store `lastSyncedAt` per board/record. For v1, stale data raises a **visible UI
   warning**; it does **not** auto-block sending.
 
 ### CRM synchronization (incomplete data is the norm)
 
 - Sync is **idempotent**: upsert keyed on `(mondayBoardId, mondayItemId)` inside a transaction.
+  Monday `board_relation` columns return **`null` for `text` and `value`** on API 2024-10 — linked
+  ids come only from `... on BoardRelationValue { linked_item_ids }`. Reading the generic fields
+  yields zero relationships **silently**, with no error (ADR-0017).
   Monday **GraphQL API** for pulls + verified **webhooks** for incremental change + a scheduled
   reconciliation backstop. Sync executions are audited via **`SyncRun`** (one run) and
   **`SyncItemLog`** (per item); raw webhook events are recorded for idempotency.
@@ -448,6 +604,12 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   (`khaled-s@axis-gps.com`).
 - **Stale-sync warning:** when the local CRM projection is stale (`lastSyncedAt` beyond threshold),
   show a visible warning; in v1 this warns rather than blocks sending.
+- **Consent labels are the only form staff see:** "Not confirmed" / "Approved for communication" /
+  "Do not send". Raw enum names never reach a screen, and neither do raw exclusion reason codes.
+- **Send readiness (`/newsletters/[id]/readiness`)** shows every check as READY / WARNING / BLOCKED,
+  the full audience funnel, the exclusion breakdown, and inspectable lists of eligible addresses and
+  exclusions. The production control is rendered **disabled** with the reason
+  *"Production customer sending has not been enabled."*
 
 ## Testing Expectations
 
@@ -465,6 +627,18 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   - **`TEST` mode sends only to `khaled-s@axis-gps.com`**;
   - **switching to `PRODUCTION` mode is explicit** (never automatic);
   - **duplicate-send protection holds in both `TEST` and `PRODUCTION`** modes.
+- **Mandatory consent & readiness tests (ADR-0021 / ADR-0022):**
+  - consent survives a Monday resync, and a language change never touches it;
+  - `GRANTED` does not override unsubscribe, suppression or an invalid address;
+  - `DENIED` excludes immediately, without needing an unsubscribe;
+  - a malformed consent update is refused and writes nothing;
+  - a bulk operation changes only the selected rows;
+  - a frozen final audience is never edited — preparing again writes a new snapshot;
+  - a CRM, language, consent, unsubscribe, suppression, segment or campaign-language change makes a
+    snapshot **stale**;
+  - a content, image, subject or audience change makes an approval **invalid**;
+  - `CampaignRecipient` count stays **zero**, production stays **BLOCKED**, and the SAFE TEST
+    workflow keeps working independently.
 - A change to a domain invariant **must** come with tests. Do not claim success while tests fail —
   report failures exactly.
 
@@ -509,3 +683,13 @@ End every task with:
 7. **Risks / Technical Debt** — real, known risks only.
 8. **Current Project State** — what is ready now.
 9. **Recommended Next Task** — exactly one; do not start it until explicitly asked.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

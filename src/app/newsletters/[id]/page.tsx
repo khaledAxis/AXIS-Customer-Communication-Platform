@@ -1,14 +1,17 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { getCampaignAudience } from "../../../server/services/campaignAudienceService";
 import { listApprovedContent } from "../../../server/services/contentService";
 import { getNewsletter } from "../../../server/services/newsletterService";
+import { listSegments } from "../../../server/services/segmentService";
 import {
   CAMPAIGN_STATUS_LABEL,
   CAMPAIGN_STATUS_TONE,
   LANGUAGE_LABEL,
   REVIEW_STATE_LABEL,
 } from "../../../ui/labels";
+import { CampaignAudienceSection } from "../../../ui/CampaignAudienceSection";
 import { NewsletterDetailsForm } from "../../../ui/NewsletterDetailsForm";
 import {
   Badge,
@@ -23,6 +26,8 @@ import {
   moveContentDownAction,
   moveContentUpAction,
   removeContentAction,
+  setCampaignSegmentAction,
+  snapshotAudienceAction,
   updateNewsletterAction,
 } from "../actions";
 
@@ -33,7 +38,11 @@ export default async function NewsletterBuilderPage({ params }: { params: Promis
   const newsletter = await getNewsletter(id);
   if (!newsletter) notFound();
 
-  const approved = await listApprovedContent(newsletter.language);
+  const [approved, audience, segments] = await Promise.all([
+    listApprovedContent(newsletter.language),
+    getCampaignAudience(newsletter.id, { withPreview: true }),
+    listSegments(),
+  ]);
   const chosenIds = new Set(newsletter.contentLinks.map((link) => link.contentItemId));
   const available = approved.filter((item) => !chosenIds.has(item.id));
   const rtl = newsletter.language === "HE" || newsletter.language === "AR";
@@ -51,6 +60,12 @@ export default async function NewsletterBuilderPage({ params }: { params: Promis
             <Badge tone="warning">Test mode</Badge>
             <Link href={`/newsletters/${newsletter.id}/preview`} className={buttonPrimary}>
               Preview email
+            </Link>
+            <Link
+              href={`/newsletters/${newsletter.id}/readiness`}
+              className={buttonSecondary}
+            >
+              Send readiness
             </Link>
             <Link href="/newsletters" className={buttonSecondary}>
               All newsletters
@@ -230,6 +245,18 @@ export default async function NewsletterBuilderPage({ params }: { params: Promis
           </Card>
         </div>
       </div>
+
+      {audience ? (
+        <div className="mt-6">
+          <CampaignAudienceSection
+            audience={audience}
+            segments={segments}
+            editable={newsletter.status === "DRAFT"}
+            setSegmentAction={setCampaignSegmentAction}
+            snapshotAction={snapshotAudienceAction}
+          />
+        </div>
+      ) : null}
     </>
   );
 }

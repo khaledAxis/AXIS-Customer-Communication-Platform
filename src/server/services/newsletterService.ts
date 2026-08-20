@@ -19,6 +19,7 @@ import {
   testSendAvailability,
   testSendConfig,
 } from "../../domain/send/testSendPolicy";
+import { getSenderIdentity } from "../integrations/email/senderIdentity";
 import * as repo from "../db/repositories/campaignRepository";
 import { getPrisma } from "../db/prisma";
 import { getNewsletterBrand, getViewInBrowserUrl } from "./brandConfig";
@@ -199,6 +200,9 @@ export interface NewsletterPreview {
   readiness: ReturnType<typeof evaluateCampaignReadiness>;
   delivery: {
     from: string;
+    senderName: string;
+    /** Where a reply is directed — central configuration, not per newsletter. */
+    replyTo: string;
     to: string;
     intended: string;
     isRedirected: boolean;
@@ -271,6 +275,7 @@ export async function getNewsletterPreview(id: string): Promise<NewsletterPrevie
   // TEST mode: the resolver proves the provider destination is the safe address,
   // never a customer address. No email is produced or sent here.
   const delivery = resolveDelivery(AUTHORIZED_TEST_RECIPIENT, testSendConfig());
+  const identity = getSenderIdentity();
 
   return {
     document,
@@ -279,6 +284,8 @@ export async function getNewsletterPreview(id: string): Promise<NewsletterPrevie
     readiness: evaluateCampaignReadiness({ selected }),
     delivery: {
       from: AUTHORIZED_TEST_SENDER,
+      senderName: identity.senderName,
+      replyTo: identity.replyToEmail,
       to: delivery.toEmail,
       intended: delivery.intendedEmail,
       isRedirected: delivery.isRedirected,

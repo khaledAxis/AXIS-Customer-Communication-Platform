@@ -602,3 +602,50 @@ describe("brand logo in the email header", () => {
     expect(renderNewsletterHtml(doc({ brand: { ...brand, logoUrl: LOGO } }))).toBe(once);
   });
 });
+
+/**
+ * The unsubscribe design is deliberately unchanged by the no-reply work (ADR-0019):
+ * one modest link in the footer, and nothing near the sender. These tests exist to
+ * make a future "improvement" to unsubscribe prominence a visible, deliberate act.
+ */
+describe("unsubscribe stays footer-only", () => {
+  it("renders the unsubscribe link in the footer", () => {
+    const html = renderNewsletterHtml(
+      doc({ unsubscribeUrl: "https://mail.axis-gps.com/u/abc123" }),
+    );
+    expect(html).toContain("https://mail.axis-gps.com/u/abc123");
+
+    // It belongs to the last part of the document, not the header or the body.
+    const position = html.indexOf("https://mail.axis-gps.com/u/abc123");
+    expect(position).toBeGreaterThan(html.length * 0.6);
+  });
+
+  it("keeps the real contact address in the footer as the way to reach AXIS", () => {
+    const html = renderNewsletterHtml(doc());
+    expect(html).toContain("info@axis-gps.com");
+    expect(html).toContain("mailto:info@axis-gps.com");
+  });
+
+  it("appears exactly once — no second unsubscribe control near the sender", () => {
+    const url = "https://mail.axis-gps.com/u/abc123";
+    const html = renderNewsletterHtml(doc({ unsubscribeUrl: url }));
+    expect(html.split(url).length - 1).toBe(1);
+  });
+
+  it("emits no List-Unsubscribe markup or one-click unsubscribe hint", () => {
+    const html = renderNewsletterHtml(
+      doc({ unsubscribeUrl: "https://mail.axis-gps.com/u/abc123" }),
+    );
+    expect(html).not.toMatch(/list-unsubscribe/i);
+    expect(html).not.toMatch(/one-click/i);
+    expect(html).not.toMatch(/<meta[^>]*unsubscribe/i);
+  });
+
+  it("keeps the unsubscribe link in the plain-text part too", () => {
+    const text = renderNewsletterText(
+      doc({ unsubscribeUrl: "https://mail.axis-gps.com/u/abc123" }),
+    );
+    expect(text).toContain("https://mail.axis-gps.com/u/abc123");
+    expect(text).toContain("info@axis-gps.com");
+  });
+});

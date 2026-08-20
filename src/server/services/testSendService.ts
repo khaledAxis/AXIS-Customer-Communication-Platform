@@ -19,6 +19,7 @@ import {
 } from "../../domain/email/newsletterTemplate";
 import { getPrisma } from "../db/prisma";
 import { getEmailProvider } from "../integrations/email";
+import { getSenderIdentity } from "../integrations/email/senderIdentity";
 import { getAuthoringUserId, getNewsletter, previewDocument } from "./newsletterService";
 
 /**
@@ -45,6 +46,10 @@ export interface RenderedTestEmail {
   text: string;
   contentItemIds: string[];
   fromEmail: string;
+  /** Friendly name shown in the inbox, part of the From header. */
+  senderName: string;
+  /** Where a recipient's reply is directed (ADR-0019). Never per-newsletter. */
+  replyToEmail: string;
   toEmail: string;
   sendMode: string;
   contentHash: string;
@@ -67,6 +72,10 @@ function renderFor(campaign: CampaignWithContent): RenderedTestEmail {
     .filter((link) => link.isIncluded)
     .map((link) => link.contentItemId);
 
+  // Resolved from central configuration — the same call the SMTP adapter makes, so
+  // the approved message and the submitted message cannot disagree.
+  const identity = getSenderIdentity();
+
   const base = {
     campaignId: campaign.id,
     subject,
@@ -75,6 +84,8 @@ function renderFor(campaign: CampaignWithContent): RenderedTestEmail {
     text,
     contentItemIds,
     fromEmail: AUTHORIZED_TEST_SENDER,
+    senderName: identity.senderName,
+    replyToEmail: identity.replyToEmail,
     toEmail: AUTHORIZED_TEST_RECIPIENT,
     sendMode: campaign.sendMode,
   };
@@ -114,6 +125,8 @@ export interface TestSendStatus {
   providerConfigured: boolean;
   providerProblems: string[];
   fromEmail: string;
+  senderName: string;
+  replyToEmail: string;
   toEmail: string;
   subject: string;
   sendMode: string;
@@ -159,13 +172,18 @@ export async function getTestSendStatus(campaignId: string): Promise<TestSendSta
           contentHash: approval.contentHash,
           fromEmail: approval.fromEmail,
           toEmail: approval.toEmail,
+          replyToEmail: approval.replyToEmail,
           sendMode: approval.sendMode,
           consumedAt: approval.consumedAt,
           revokedAt: approval.revokedAt,
         }
       : null,
     rendered.contentHash,
-    { fromEmail: rendered.fromEmail, toEmail: rendered.toEmail },
+    {
+      fromEmail: rendered.fromEmail,
+      toEmail: rendered.toEmail,
+      replyToEmail: rendered.replyToEmail,
+    },
   );
 
   const lastSend = await getPrisma().campaignTestSend.findFirst({
@@ -200,6 +218,8 @@ export async function getTestSendStatus(campaignId: string): Promise<TestSendSta
     providerConfigured: configuration.configured,
     providerProblems: configuration.problems,
     fromEmail: rendered.fromEmail,
+    senderName: rendered.senderName,
+    replyToEmail: rendered.replyToEmail,
     toEmail: rendered.toEmail,
     subject: rendered.subject,
     sendMode: campaign.sendMode,
@@ -267,6 +287,8 @@ export async function approveTestSend(campaignId: string): Promise<TestSendResul
         subjectSnapshot: rendered.subject,
         preheaderSnapshot: rendered.preheader,
         fromEmail: rendered.fromEmail,
+        senderName: rendered.senderName,
+        replyToEmail: rendered.replyToEmail,
         toEmail: rendered.toEmail,
         sendMode: "TEST",
         approvedById,
@@ -285,6 +307,7 @@ export async function approveTestSend(campaignId: string): Promise<TestSendResul
           approvalId: approval.id,
           contentHash: rendered.contentHash,
           fromEmail: rendered.fromEmail,
+          replyToEmail: rendered.replyToEmail,
           toEmail: rendered.toEmail,
         },
       },
@@ -329,13 +352,18 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
           contentHash: approval.contentHash,
           fromEmail: approval.fromEmail,
           toEmail: approval.toEmail,
+          replyToEmail: approval.replyToEmail,
           sendMode: approval.sendMode,
           consumedAt: approval.consumedAt,
           revokedAt: approval.revokedAt,
         }
       : null,
     rendered.contentHash,
-    { fromEmail: rendered.fromEmail, toEmail: rendered.toEmail },
+    {
+      fromEmail: rendered.fromEmail,
+      toEmail: rendered.toEmail,
+      replyToEmail: rendered.replyToEmail,
+    },
   );
 
   if (!check.valid || !approval) {
@@ -381,6 +409,8 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
           approvalId: approval.id,
           idempotencyKey,
           fromEmail,
+          senderName: rendered.senderName,
+          replyToEmail: rendered.replyToEmail,
           toEmail,
           subjectSnapshot: rendered.subject,
           contentHash: rendered.contentHash,
@@ -402,6 +432,7 @@ export async function sendApprovedTestEmail(campaignId: string): Promise<TestSen
             approvalId: approval.id,
             contentHash: rendered.contentHash,
             fromEmail,
+            replyToEmail: rendered.replyToEmail,
             toEmail,
           },
         },
