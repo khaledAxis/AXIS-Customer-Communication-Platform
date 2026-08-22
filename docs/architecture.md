@@ -680,6 +680,50 @@ that could widen the audience, in the service **and again inside the adapter**. 
 writes no `CampaignRecipient`, `CampaignEvent` or `CampaignFinalAudience`, and a human
 triggers it: no scheduler, no worker, no test.
 
+## 10.10 Content sources, review inbox & assisted automation (ADR-0026)
+
+```
+ ADMIN adds a source            MANAGER reviews                MANAGER builds
+ ──────────────────             ───────────────                ──────────────
+ /sources                       /content/inbox                 tick approved items
+   name + feed URL                title · source · excerpt       → "Create newsletter draft"
+   │                              │                              │
+   ▼                              ▼                              ▼
+ validateSourceUrl()           approve / reject               Campaign(DRAFT)
+   public http(s) only           (audited, named actor)         + CampaignContentItem[0..n]
+   no credentials/ports          editorial copy saved           segmentId = NULL
+   no private/internal/metadata  in SEPARATE columns            no final audience
+   │                                                            no CampaignRecipient
+   ▼
+ feedFetcher.fetchFeed()  ← the ONLY outbound request in this feature
+   re-validate shape → resolve DNS → check EVERY address
+   → manual redirect, re-validated per hop
+   → streamed size cap · timeout · content-type · no credentials
+   │
+   ▼
+ parseFeed()  — refuses DOCTYPE/ENTITY; extracts a fixed element set
+   │
+   ▼
+ ContentItem(reviewState = PENDING_REVIEW)   ← never APPROVED by any code path
+   UNIQUE (sourceId, externalId) · UNIQUE (sourceId, normalizedUrl)
+```
+
+**Ownership inside `ContentItem`** mirrors the CRM projection's per-field boundary:
+`title`, `summary`, `author`, `externalUrl`, `publishedAt` are the publisher's and are
+refreshed by ingestion; `axisHeadline`, `axisSummary`, `ctaLabel`, `ctaUrl`,
+`internalNote` are AXIS's and are never touched by a sync. `saveEditorial`'s payload
+contains only the second set, so the separation is structural.
+
+**Automation** (`runAutomation`) collects, then drafts from content a person ALREADY
+approved — so a new automation's first run reports `NO_CONTENT`, which is stated plainly
+and is not an error. `@@unique([automationId, scheduledFor])` makes an occurrence happen
+once. There is no path from this service to either email provider, to `dispatchCampaign`
+or to `CampaignRecipient`, and a test asserts that against the source.
+
+**Test-runner guard:** both provider registries refuse to construct a network-capable
+adapter under `VITEST`/`NODE_ENV=test`, because a developer machine holds real
+credentials in `.env.local` and the suite reads the same environment.
+
 ## 11. Testing Strategy (architecture view)
 
 - **Unit** the `domain/` layer (state machine, eligibility, classification, validation, safe-send
@@ -691,6 +735,11 @@ triggers it: no scheduler, no worker, no test.
 - **Sending safety (ADR-0008):** unsubscribed contact cannot receive; unsubscribe survives sync; TEST
   mode never mails a real address and sends only to `khaled-s@axis-gps.com`; production switch is
   explicit; duplicate-send protection holds in both modes.
+- **Content sources & automation (ADR-0026):** a private, loopback, metadata or non-HTTP source URL
+  is refused and a redirect to a private target fails the source; a DOCTYPE feed is refused;
+  re-polling creates nothing new and similar titles are not merged; a failing source leaves the
+  others working; unreviewed and rejected content cannot enter a draft; a draft chooses no segment
+  and creates no recipient; a paused automation does not run; one occurrence yields one run.
 - **Provider & pilot (ADR-0025):** the pilot reaches exactly one address and refuses every widening
   shape; a Gmail approval cannot authorise a Resend submission or the reverse; a pilot writes no
   customer delivery rows; an unsigned webhook changes nothing and names nobody; production dispatch

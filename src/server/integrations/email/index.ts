@@ -27,12 +27,57 @@ import { ResendProductionEmailProvider } from "./resendProductionEmailProvider";
 
 let override: EmailProvider | undefined;
 let singleton: EmailProvider | undefined;
+let testTransport: EmailProvider | undefined;
+
+/**
+ * What the SAFE TEST port resolves to under the test runner when nothing was injected.
+ *
+ * It reports itself unconfigured and THROWS if asked to send, so a test that reaches
+ * this fails loudly rather than quietly mailing khaled-s@axis-gps.com.
+ */
+class RefusingTestTransport implements EmailProvider {
+  readonly name = "FAKE" as const;
+
+  checkConfiguration() {
+    return {
+      configured: false,
+      name: this.name,
+      problems: [
+        "No email provider was injected for this test, so nothing can be sent.",
+      ],
+      senderEmail: undefined,
+    };
+  }
+
+  async sendTestEmail(): Promise<never> {
+    throw new Error(
+      "A test attempted to send a real email. Inject a fake provider with " +
+        "setEmailProviderForTesting instead.",
+    );
+  }
+}
 
 /** The SAFE TEST transport (Gmail SMTP). Never used for customer delivery. */
 export function getEmailProvider(): EmailProvider {
   if (override) return override;
+  if (inTestRunner()) {
+    // The same rule as the production port below: a machine with real Gmail
+    // credentials in `.env.local` must not be able to send from a test. A suite that
+    // needs this port injects a fake; one that forgot gets a provider that refuses.
+    testTransport ??= new RefusingTestTransport();
+    return testTransport;
+  }
   if (!singleton) singleton = new GmailSmtpEmailProvider();
   return singleton;
+}
+
+/**
+ * Whether a live vendor adapter may be constructed at all.
+ *
+ * Exported so a test can assert the guarantee rather than trusting it.
+ */
+export function liveProvidersPermitted(): boolean {
+  return !inTestRunner();
 }
 
 /**
@@ -45,6 +90,22 @@ export function setEmailProviderForTesting(provider: EmailProvider | undefined):
 
 let productionOverride: ProductionEmailProvider | undefined;
 let productionSingleton: ProductionEmailProvider | undefined;
+
+/**
+ * Under the test runner, a NETWORK-CAPABLE vendor adapter is never handed out.
+ *
+ * A developer machine legitimately holds real credentials in `.env.local`, and the
+ * test suite reads the same environment. Without this, running the tests on a
+ * configured machine would resolve to the live adapter — and one mis-scoped test
+ * would be a real API call, possibly a real email. The suite must be incapable of
+ * that, not merely careful about it.
+ *
+ * Tests that need a provider inject a fake through `setProductionEmailProviderForTesting`,
+ * which still works: the override is checked first.
+ */
+function inTestRunner(): boolean {
+  return process.env.NODE_ENV === "test" || process.env.VITEST !== undefined;
+}
 
 /**
  * The PRODUCTION customer transport.
@@ -66,7 +127,7 @@ export function getProductionEmailProvider(
   const kind = (process.env.PRODUCTION_EMAIL_PROVIDER ?? "").trim().toLowerCase();
   const hasKey = (process.env.RESEND_API_KEY ?? "").trim() !== "";
 
-  if (kind === "resend" && hasKey) {
+  if (kind === "resend" && hasKey && !inTestRunner()) {
     // Not cached when a domain report is supplied — the snapshot changes as DNS
     // propagates, and a stale "verified" is exactly the wrong thing to cache.
     if (knownDomain) return new ResendProductionEmailProvider(knownDomain);

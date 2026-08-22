@@ -56,6 +56,7 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | Email HTML | **One canonical renderer** in `domain/email` | Table-based + inline styles; preview and sender share it (ADR-0011). No email-template library |
 | Rich text | **Restricted markup rendered server-side** | No stored client HTML; XSS-safe by construction. No WYSIWYG dependency (ADR-0012) |
 | Media | **`MediaStore` port**; **Cloudinary** hosted, local disk fallback | Selected by `MEDIA_PROVIDER`; `CLOUDINARY_URL` is a **secret**; never in `public/`, never in PostgreSQL (ADR-0012/0016) |
+| Content sources | **RSS / Atom feeds** via a purpose-built reader | SSRF-guarded fetcher; **no crawler, no XML dependency, no AI** (ADR-0026) |
 | Jobs | Deferred | In-process scheduling first; **Redis/BullMQ only when justified** (see ADR-0005) |
 
 **Not yet installed, and must not be added until its milestone has a concrete need:** Redis, BullMQ,
@@ -84,13 +85,16 @@ Resend SDK are now installed and in use — the last selected in ADR-0025.)
 │   │   │                     #   pilot allowlist + domain-auth interpretation (ADR-0025)
 │   │   ├── unsubscribe/     # Unsubscribe token + public-URL policy (ADR-0024)
 │   │   ├── campaign/         # Production approval hash + send-readiness evaluator (ADR-0022)
+│   │   ├── content/         # Source-URL (SSRF) policy, feed reader, article identity,
+│   │   │                     #   automation occurrences (ADR-0026)
 │   │   └── segment/          # Segment rule catalogue + validation (ADR-0018)
 │   ├── server/               # Server-only: services, data access, integrations, auth
 │   │   ├── services/         # Use-cases / application layer (orchestrate domain + persistence)
 │   │   ├── auth/             # Auth.js wiring, Argon2id hashing, session DAL (ADR-0023)
 │   │   ├── db/               # Prisma client + repositories (added at DB milestone)
 │   │   ├── media/            # MediaStore port + local-disk implementation (dev)
-│   │   └── integrations/     # External adapters (Monday CRM, email provider, ingestion) behind interfaces
+│   │   └── integrations/     # External adapters behind interfaces — Monday CRM, email
+│   │                         #   providers, and the SSRF-guarded feed fetcher (ADR-0026)
 │   ├── lib/                  # Framework-agnostic shared utilities (validation, formatting)
 │   └── ui/                   # Reusable presentational components (RTL-aware)
 ├── prisma/                   # schema.prisma + migrations (added at DB milestone)
@@ -388,6 +392,65 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 - **Unsubscribe appearance is unchanged on this path too:** one small footer link. No
   `List-Unsubscribe`, no `List-Unsubscribe-Post`, no Gmail one-click control.
 
+### Content sources, review inbox & assisted automation (ADR-0026)
+
+- **Feeds only — this is NOT a crawler.** v1 reads declared RSS 2.0 / Atom 1.0 feeds plus a
+  `MANUAL_EXTERNAL` kind added by hand. There is no crawl depth, no link-following, no
+  link-discovery toggle and no HTML scraping, and their absence IS the control.
+- **SSRF defence is two halves, both required.** `domain/content/sourceUrl.ts` (pure) allows only
+  public `http(s)`, no credentials, ports 80/443, and refuses loopback, RFC1918, link-local, CGNAT,
+  private IPv6 **including IPv4-mapped forms** (`::ffff:127.0.0.1`), internal hostnames, bare
+  labels, and cloud metadata by address AND name. `server/integrations/content/feedFetcher.ts` is
+  the **only** place a source is fetched: it resolves DNS and re-checks EVERY resolved address,
+  follows redirects **manually one hop at a time re-validating each hop** (`redirect: "follow"`
+  would hand the decision to undici), caps the body **while streaming**, times out, checks the
+  content type, and sends no cookies, no `Authorization` and no AXIS identity.
+- **The feed reader refuses a DOCTYPE or ENTITY declaration outright** and has no concept of
+  resolving one, so XXE and entity-expansion bombs have nothing to attack. A malformed feed yields
+  fewer items, never an exception.
+- **Collected is never usable.** Every ingested item is created `PENDING_REVIEW`; no branch, flag
+  or configuration creates one `APPROVED`. Only a signed-in person approves or rejects, and both
+  write an audit row naming them.
+- **Dedup is the database, not a check.** Identity is `(source, externalId)` or
+  `(source, normalizedUrl)`, both UNIQUE. Normalization drops scheme, `www.`, default port,
+  fragment and campaign tracking parameters and sorts the rest, but **keeps** parameters like
+  `?id=12` which often ARE the article. It **never merges on resemblance** — similar titles are
+  not a signal, and identity is scoped per source.
+- **Source metadata and AXIS editorial copy are separately owned.** Mirrored: `title`, `summary`,
+  `author`, `externalUrl`, `publishedAt`. Local: `axisHeadline`, `axisSummary`, `ctaLabel`,
+  `ctaUrl`, `internalNote`. `saveEditorial`'s update payload holds ONLY the second set, so it
+  cannot rewrite the publisher or approve anything — a re-collection refreshes the source fields
+  and never destroys the words a colleague wrote.
+- **Only a title, a short source-supplied excerpt and a link are stored** — never the article.
+  Atom `<summary>` is preferred over `<content>` (often the whole piece), excerpts are truncated at
+  ingestion, and the newsletter links to the original.
+- **Adding a SOURCE is ADMIN** (`MANAGE_CONTENT_SOURCES`) because a source is a URL this server
+  will fetch. Reviewing ARTICLES is ordinary MANAGER work. This amends ADR-0023's "exactly one
+  admin capability" note; the invariant it protected is now tested directly — **nothing an
+  administrator holds alone can approve, send, or choose who receives an email**.
+- **Automation prepares a DRAFT and can do nothing else.** It drafts only from content a person
+  ALREADY approved, so a new automation's first run legitimately reports `NO_CONTENT`. The draft
+  has **no segment**, no final audience, no `CampaignRecipient` and no approval. A test asserts
+  against the source that `automationService.ts` names neither provider registry, nor
+  `dispatchCampaign`, nor `campaignRecipient`.
+- **An occurrence happens once** (`@@unique([automationId, scheduledFor])`) — a double click, a
+  retry or two workers collapse into ONE run at the database. A **missed occurrence stays due**,
+  deliberately the opposite of ADR-0010's rule for a scheduled SEND.
+- **"Nothing new" is `NO_CONTENT`, stated in a plain sentence** — never rendered as an error.
+  A paused automation does not run, leaves no run row, and carries no next occurrence.
+- **One failing source is one failing line:** each source is fetched and committed independently
+  and the batch is `PARTIAL`. Diagnostics are friendly text — never a stack trace, and never an
+  internal address, even in a run log.
+- **External images are imported only on explicit request**, with the same guards as an upload
+  (public URL, size cap, magic-byte sniffing, SVG refused). Hot-linking breaks when a publisher
+  reorganises their CDN; importing everything automatically would be rude and expensive.
+- **No AI.** Subject/preheader suggestions are mechanical string operations. Adding a generator
+  needs its own ADR, and its output would be DRAFT text requiring human review.
+- **No live provider can be constructed under the test runner.** A developer machine holds real
+  credentials in `.env.local` and the suite reads the same environment, so BOTH registries refuse
+  a network-capable adapter under `VITEST`/`NODE_ENV=test`; the SAFE TEST port resolves to a
+  transport that throws.
+
 ### Contact consent / eligibility (never email the wrong person)
 
 A contact is **email-eligible** only if **all** hold, re-checked at send time:
@@ -683,7 +746,9 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
 - **Authorization:** one capability matrix in `domain/auth/authorization.ts`, **enforced
   server-side** by `requireCapability` in every service — not merely by hiding UI. A service
   never re-derives a rule from a role string. MANAGER runs the communication business; ADMIN
-  adds **exactly one** capability, `MANAGE_USERS`.
+  adds only INFRASTRUCTURE capabilities — `MANAGE_USERS` (ADR-0023) and
+  `MANAGE_CONTENT_SOURCES` (ADR-0026, a URL this server will fetch). **Nothing an administrator
+  holds alone can approve, send, or choose who receives an email**, and a test asserts it.
 - **The actor is always the session.** No service function takes an actor, approver or user id
   as a parameter, and no parsed input shape has such a field, so a forged form value has nothing
   to attach to. Deactivated and system accounts hold **no** capability whatever their role.
@@ -818,6 +883,22 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
     distinct from `DELIVERED`, and `UNCERTAIN` is never picked up again;
   - a hard bounce suppresses and invalidates; a complaint suppresses without invalidating; the
     same provider event ingests once; an unverifiable webhook is refused.
+- **Mandatory content-source & automation tests (ADR-0026):**
+  - a private, loopback, metadata, non-HTTP or credentialed source URL is refused, and a
+    redirect to a private target fails the source without ingesting anything;
+  - a DOCTYPE/ENTITY feed is refused; an HTML page is reported as "not a feed";
+  - re-polling the same feed creates nothing new; tracking parameters do not create a
+    duplicate; two different articles with the same title are NOT merged;
+  - one failing source leaves the others working and the batch `PARTIAL`;
+  - ingested content is `PENDING_REVIEW`, and rejected or unreviewed content cannot enter a
+    draft even when its id is supplied directly;
+  - AXIS editorial copy is stored separately and survives a re-collection;
+  - a draft created from content has ordered items, the first as hero, **no segment**, no final
+    audience and **zero** `CampaignRecipient`;
+  - a paused automation does not run and leaves no run row; one occurrence yields ONE run
+    under concurrency; "nothing new" is `NO_CONTENT`, not a failure;
+  - a MANAGER cannot add a source; an ADMIN can; every action is audited to the real actor;
+  - **no live email provider can be constructed under the test runner** (both ports).
 - **Mandatory password-change tests (ADR-0024):** an administrator-issued password grants NO
   capability, can still sign in, and is replaceable exactly once — after which the old password
   fails, the new one works, the flag clears, and the audit row records the change without the

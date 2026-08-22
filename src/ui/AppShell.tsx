@@ -20,6 +20,8 @@ import { TestModeBanner, buttonSubtle } from "./primitives";
 const NAV = [
   { href: "/", label: "Dashboard", icon: "🏠" },
   { href: "/content", label: "Content", icon: "📝" },
+  { href: "/content/inbox", label: "Review inbox", icon: "📥" },
+  { href: "/sources", label: "Sources", icon: "🌐" },
   { href: "/newsletters", label: "Newsletters", icon: "✉️" },
   { href: "/automations", label: "Automations", icon: "🔁" },
   { href: "/customers", label: "Customers", icon: "👥" },

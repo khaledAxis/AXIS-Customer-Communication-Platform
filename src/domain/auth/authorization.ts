@@ -31,6 +31,17 @@ export const Capability = {
   SEND_TEST_EMAIL: "SEND_TEST_EMAIL",
   RUN_CRM_SYNC: "RUN_CRM_SYNC",
   MANAGE_USERS: "MANAGE_USERS",
+  /**
+   * Adding or editing a CONTENT SOURCE — a URL this server will fetch (ADR-0026).
+   *
+   * ADMIN only, and not because reading a news feed is dangerous. The danger is the
+   * URL itself: whoever supplies one directs a server-side request from inside AXIS's
+   * network. The fetcher refuses private and internal destinations, but a control
+   * whose whole purpose is "the server fetches what I typed" belongs with the people
+   * who already administer the platform. Reviewing and approving the ARTICLES that
+   * arrive is ordinary editorial work and stays with MANAGER.
+   */
+  MANAGE_CONTENT_SOURCES: "MANAGE_CONTENT_SOURCES",
 } as const;
 export type Capability = (typeof Capability)[keyof typeof Capability];
 
@@ -52,7 +63,10 @@ const MANAGER_CAPABILITIES: readonly Capability[] = [
   Capability.RUN_CRM_SYNC,
 ];
 
-const ADMIN_ONLY_CAPABILITIES: readonly Capability[] = [Capability.MANAGE_USERS];
+const ADMIN_ONLY_CAPABILITIES: readonly Capability[] = [
+  Capability.MANAGE_USERS,
+  Capability.MANAGE_CONTENT_SOURCES,
+];
 
 export const CAPABILITIES_BY_ROLE: Record<Role, readonly Capability[]> = {
   MANAGER: MANAGER_CAPABILITIES,

@@ -67,12 +67,39 @@ describe("roles", () => {
     }
   });
 
-  it("adds exactly one capability for an administrator", () => {
+  it("adds only INFRASTRUCTURE capabilities for an administrator", () => {
     const extra = CAPABILITIES_BY_ROLE.ADMIN.filter(
       (capability) => !CAPABILITIES_BY_ROLE.MANAGER.includes(capability),
     );
-    // "Administrator" must not quietly become a way around a business rule.
-    expect(extra).toEqual([Capability.MANAGE_USERS]);
+    // "Administrator" must not quietly become a way around a BUSINESS rule. The
+    // extras are both infrastructure: who may sign in (ADR-0023), and which external
+    // URL this server may fetch (ADR-0026). Neither approves, sends, or decides who
+    // receives an email — an ADMIN is still bound by four-eyes and by the send gate.
+    expect([...extra].sort()).toEqual(
+      [Capability.MANAGE_USERS, Capability.MANAGE_CONTENT_SOURCES].sort(),
+    );
+  });
+
+  it("keeps every SENDING and APPROVAL capability shared, never admin-only", () => {
+    // The real invariant behind the test above: nothing an administrator holds alone
+    // may touch approval or delivery.
+    for (const capability of [
+      Capability.APPROVE_PRODUCTION,
+      Capability.PREPARE_FINAL_AUDIENCE,
+      Capability.SEND_TEST_EMAIL,
+    ]) {
+      expect(CAPABILITIES_BY_ROLE.MANAGER).toContain(capability);
+    }
+  });
+
+  it("does not let a manager add a content source", () => {
+    // Supplying a URL the server will fetch is an infrastructure act (ADR-0026).
+    expect(can(actor({ role: Role.MANAGER }), Capability.MANAGE_CONTENT_SOURCES)).toBe(
+      false,
+    );
+    expect(can(actor({ role: Role.ADMIN }), Capability.MANAGE_CONTENT_SOURCES)).toBe(
+      true,
+    );
   });
 });
 

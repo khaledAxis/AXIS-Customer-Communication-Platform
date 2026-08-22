@@ -43,7 +43,7 @@ default awaiting confirmation from stakeholders.
 | [0007](0007-monday-crm-source-of-truth.md) | Monday.com as the CRM source of truth (platform is a read-only projection) | Accepted |
 | [0008](0008-test-safe-send-mode-and-unsubscribe.md) | Test/Safe-send mode & locally-owned, sync-immune unsubscribe | Accepted |
 | [0009](0009-communication-address-and-dedup-ledger.md) | CommunicationAddress, deduplicated delivery ledger & test-send isolation | Accepted — **authoritative for the data model** |
-| [0010](0010-newsletter-automation-and-content.md) | Recurring newsletter automation, multi-content composition & reviewed external content | Accepted |
+| [0010](0010-newsletter-automation-and-content.md) | Recurring newsletter automation, multi-content composition & reviewed external content | Accepted — **implemented by ADR-0026** |
 | [0011](0011-canonical-email-rendering.md) | One canonical newsletter rendering path (preview = sent HTML) | Accepted |
 | [0012](0012-authoring-media-and-safe-test-send-ui.md) | Content authoring, image storage & the SAFE test-send surface | Accepted |
 | [0013](0013-microsoft-graph-safe-test-send.md) | Microsoft Graph SAFE TEST sending with explicit, hash-bound approval | Accepted — **transport superseded by ADR-0014** (approval model still authoritative) |
@@ -56,9 +56,10 @@ default awaiting confirmation from stakeholders.
 | [0020](0020-communication-language-assignment.md) | Staff-assigned communication language, bulk enrichment & never-inferred values | Accepted |
 | [0021](0021-communication-consent-management.md) | Staff-recorded communication consent, evidence requirements & bulk safeguards | Accepted |
 | [0022](0022-final-audience-and-send-readiness.md) | Immutable final audience, hash-bound production approval & the send-readiness checklist | Accepted |
-| [0023](0023-authentication-and-four-eyes-enforcement.md) | Credentials authentication (Argon2id), server-enforced roles & enforced four-eyes approval | Accepted — **implements ADR-0003** |
+| [0023](0023-authentication-and-four-eyes-enforcement.md) | Credentials authentication (Argon2id), server-enforced roles & enforced four-eyes approval | Accepted — **implements ADR-0003**; admin-capability note amended by ADR-0026 |
 | [0024](0024-public-unsubscribe-and-production-delivery.md) | Public tokenized unsubscribe, production delivery ledger & the disabled production provider | Accepted — **vendor still deferred (ADR-0004)** |
 | [0025](0025-resend-provider-domain-auth-and-internal-pilot.md) | **Resend** selected as the production provider, AXIS domain authentication, signed webhooks & the internal provider pilot | Accepted — **production delivery still LOCKED** |
+| [0026](0026-content-sources-review-inbox-and-assisted-automation.md) | Content sources (RSS/Atom), SSRF-guarded ingestion, the review inbox, AXIS editorial copy & assisted DRAFT automation | Accepted — **amends ADR-0023's admin-capability note**; automation never sends |
 
 ---
 
