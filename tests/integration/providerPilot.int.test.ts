@@ -176,6 +176,12 @@ d("internal provider pilot", () => {
     }
 
     try {
+      // The suite asserts a VERIFIED domain, so it writes one. Leaving that row behind
+      // would make the admin screen claim Resend verified axis-gps.com when nobody ever
+      // checked — exactly the "not checked vs not verified" blur ADR-0025 forbids.
+      await prisma.providerDomainSnapshot.deleteMany({
+        where: { provider: "RESEND", domain: "axis-gps.com" },
+      });
       await prisma.campaignTestSend.deleteMany({
         where: { campaignId: { in: created.campaign } },
       });

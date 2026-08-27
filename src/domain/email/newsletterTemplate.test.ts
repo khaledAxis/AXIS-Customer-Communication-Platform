@@ -144,15 +144,25 @@ describe("featured article", () => {
 });
 
 describe("call to action", () => {
-  it("renders a table-based pill button for the featured article", () => {
+  it("renders a table-based call-to-action button for the featured article", () => {
     const html = renderNewsletterHtml(
       doc({ items: [{ title: "F", externalUrl: "https://axis-gps.com/a" }] }),
     );
     expect(html).toContain('href="https://axis-gps.com/a"');
-    expect(html).toContain("border-radius:28px");
-    // bgcolor makes Outlook paint the fill even though it ignores border-radius.
+    // A small radius rather than a full pill (ADR-0032): squarer reads as editorial
+    // and considered, where a pill reads as consumer. Outlook ignores the radius
+    // either way, which is why `bgcolor` carries the fill.
+    expect(html).toContain("border-radius:4px");
     expect(html).toContain('bgcolor="#0b5cab"');
     expect(html).toContain("לפרטים נוספים"); // Hebrew "learn more"
+  });
+
+  it("gives the call to action a comfortably tappable target", () => {
+    const html = renderNewsletterHtml(
+      doc({ items: [{ title: "F", externalUrl: "https://axis-gps.com/a" }] }),
+    );
+    // 16px vertical padding around 14px text clears the ~44px minimum touch target.
+    expect(html).toContain("padding:16px 40px");
   });
 
   it("uses the Arabic call-to-action label for an Arabic newsletter", () => {

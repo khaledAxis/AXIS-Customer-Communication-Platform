@@ -754,15 +754,22 @@ d("content sources, review and automation", () => {
     const item = await prisma.contentItem.findFirstOrThrow({ where: { sourceId } });
     await reviewService.approveContent(item.id);
 
-    const before = await prisma.campaignRecipient.count();
-
     const id = await newAutomation({ sourceIds: [sourceId] });
     setFeedFetcherForTesting(async () => okFetch(rssWith([])));
     const result = await automationService.runAutomation(id);
     if (result.campaignId) created.campaign.push(result.campaignId);
 
-    // Globally unchanged: the automation added no delivery row anywhere.
-    expect(await prisma.campaignRecipient.count()).toBe(before);
+    // Scoped to the campaign this run produced. A GLOBAL count would race with the
+    // delivery suite running in parallel, and "no rows for this campaign" is the
+    // invariant that actually matters.
+    expect(
+      await prisma.campaignRecipient.count({ where: { campaignId: result.campaignId! } }),
+    ).toBe(0);
+    expect(
+      await prisma.campaignFinalAudience.count({
+        where: { campaignId: result.campaignId! },
+      }),
+    ).toBe(0);
 
     const campaign = await prisma.campaign.findUniqueOrThrow({
       where: { id: result.campaignId! },

@@ -22,7 +22,9 @@ import {
 import { Capability, requireCapability } from "../auth/session";
 import { getSenderIdentity } from "../integrations/email/senderIdentity";
 import * as repo from "../db/repositories/campaignRepository";
-import { getNewsletterBrand, getViewInBrowserUrl } from "./brandConfig";
+import { publicNewsletterUrl } from "../../domain/newsletter/publicPage";
+import { validatePublicAppUrl } from "../../domain/unsubscribe/publicUrl";
+import { getNewsletterBrand } from "./brandConfig";
 import { testUnsubscribeUrl } from "./unsubscribeService";
 
 /**
@@ -203,6 +205,20 @@ export interface NewsletterPreview {
 
 type CampaignWithContent = NonNullable<Awaited<ReturnType<typeof repo.getCampaign>>>;
 
+/**
+ * The configured public origin, or null when it is unusable.
+ *
+ * Development origins are allowed through here; the deliverability rule in the
+ * template is what actually decides whether the link is shown, so a developer's
+ * `http://localhost` still correctly produces NO link in an email.
+ */
+function configuredPublicOrigin(): string | null {
+  const result = validatePublicAppUrl(process.env.PUBLIC_APP_URL, {
+    allowDevelopmentOrigins: true,
+  });
+  return result.ok ? result.origin : null;
+}
+
 export function buildNewsletterDocument(campaign: CampaignWithContent): NewsletterDocument {
   const items: NewsletterItem[] = campaign.contentLinks
     .filter((link) => link.isIncluded)
@@ -225,7 +241,19 @@ export function buildNewsletterDocument(campaign: CampaignWithContent): Newslett
     language: campaign.language,
     items,
     brand: getNewsletterBrand(),
-    viewInBrowserUrl: getViewInBrowserUrl(),
+    /**
+     * "View as webpage" (ADR-0032).
+     *
+     * Derived from THIS campaign's public token, not from a single configured URL —
+     * a link that promises "this message on the web" and opens something else is
+     * worse than no link. Null when the newsletter has no web version, or when the
+     * configured origin is not one a recipient could reach; the template then hides
+     * the row rather than shipping a dead link.
+     */
+    viewInBrowserUrl: publicNewsletterUrl(
+      configuredPublicOrigin(),
+      campaign.publicToken ?? null,
+    ),
     /**
      * PREVIEW / SAFE TEST unsubscribe link (ADR-0024).
      *

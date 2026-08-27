@@ -153,9 +153,55 @@ enum EmailProviderKind {
 /// one hard-coded address, and PROVIDER PILOT goes through Resend to one hard-coded
 /// address. An approval minted for one can never authorise a submission on the other,
 /// because the channel is part of what is checked.
+/// Whether a QA record describes a REAL live send or a synthetic test fixture
+/// (ADR-0028). The distinction is what makes fixture cleanup safe: a cleanup routine
+/// may only ever delete TEST_FIXTURE rows, and the repository refuses anything else.
+enum QaRecordOrigin {
+  /// A real email was submitted to a real provider. NEVER deleted automatically.
+  LIVE
+  /// Created by an automated test. Owned by a fixture and safe to remove.
+  TEST_FIXTURE
+}
+
+/// Lifecycle of a QA run (ADR-0028). A run is opened by an explicit ADMIN action and
+/// never by a restart, a test, or an environment change.
+enum QaRunStatus {
+  OPEN
+  CLOSED
+}
+
+/// A human reviewer's verdict on ONE rendering check of ONE QA message (ADR-0030).
+/// `NOT_CHECKED` is the honest default and is never inferred to be a pass.
+enum QaCheckStatus {
+  NOT_CHECKED
+  PASS
+  FAIL
+}
+
+/// How bad a failed check is. Recorded only when a check FAILS.
+enum QaDefectSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  COSMETIC
+}
+
+enum QaSendState {
+  SENDING
+  ACCEPTED
+  FAILED
+  /// Provider result unreadable. Counts against the cap and is NEVER auto-resent.
+  UNCERTAIN
+}
+
 enum SendChannel {
   SAFE_TEST_GMAIL
   PROVIDER_PILOT
+  /// Internal QA email to the four-address allowlist (ADR-0027). A separate channel
+  /// from SAFE_TEST_GMAIL even though both use Gmail: different policy, different
+  /// allowlist, and queries are scoped so neither can authorise the other.
+  QA_EMAIL
 }
 
 enum EmailSourceType {
@@ -353,6 +399,12 @@ enum AuditAction {
   AUTOMATION_PAUSED
   AUTOMATION_ENABLED
   AUTOMATION_RUN
+  /// Internal QA email (ADR-0027). Never a customer send.
+  QA_EMAIL_SENT
+  /// QA run lifecycle and ledger integrity (ADR-0028).
+  QA_RUN_OPENED
+  QA_RUN_CLOSED
+  QA_LEDGER_RECOVERED
   ADMIN_CHANGE
 }
 
@@ -616,6 +668,9 @@ model User {
   preparedAudiences   CampaignFinalAudience[]      @relation("FinalAudiencePreparer")
   createdSources      ContentSource[]              @relation("ContentSourceCreator")
   reviewedContent     ContentItem[]                @relation("ContentReviewer")
+  qaRuns              QaEmailRun[]                 @relation("QaRunCreator")
+  qaSends             QaEmailSend[]                @relation("QaSendRequester")
+  qaReviews           QaReviewCheck[]              @relation("QaReviewer")
 
   @@index([isActive])
   @@index([role])
@@ -693,30 +748,42 @@ model Segment {
 }
 
 model Campaign {
-  id                String         @id @default(cuid())
-  name              String
-  language          Language
-  status            CampaignStatus @default(DRAFT)
-  sendMode          SendMode       @default(TEST) // TEST is the default
-  segmentId         String?
+  id        String         @id @default(cuid())
+  name      String
+  language  Language
+  status    CampaignStatus @default(DRAFT)
+  sendMode  SendMode       @default(TEST) // TEST is the default
+  segmentId String?
   // Editable working copy (DRAFT only). Frozen into snapshotSubject/snapshotPreheader
   // at approval/send — the snapshot, not these, is the authoritative sent record.
-  subject           String?
-  preheader         String?
+  subject   String?
+  preheader String?
+
+  /// Opaque public identifier for the hosted web version of this newsletter
+  /// (ADR-0032). Stored in PLAINTEXT, unlike the unsubscribe token: an unsubscribe
+  /// token authorises a state change and is therefore hashed, while this one only
+  /// grants read access to content meant to be public — and the same URL must be
+  /// reproducible for every render, which a hash cannot do.
+  ///
+  /// NULL means there is no public page, and the email then HIDES the
+  /// "View as webpage" link rather than shipping a dead one.
+  publicToken           String?   @unique
+  publicPageEnabledAt   DateTime?
+  publicPageEnabledById String?
   // content snapshot frozen at submit/approve → history reproducible (authoritative record of what was sent)
-  snapshotSubject   String?
-  snapshotPreheader String?
-  snapshotBodyHtml  String?
-  snapshotBodyText  String?
-  snapshotAt        DateTime?
-  createdById       String
-  approvedById      String? // four-eyes: must differ from creator (enforced server-side)
-  approvedAt        DateTime?
-  rejectionReason   String?
-  scheduledAt       DateTime?
-  sentAt            DateTime?
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  snapshotSubject       String?
+  snapshotPreheader     String?
+  snapshotBodyHtml      String?
+  snapshotBodyText      String?
+  snapshotAt            DateTime?
+  createdById           String
+  approvedById          String? // four-eyes: must differ from creator (enforced server-side)
+  approvedAt            DateTime?
+  rejectionReason       String?
+  scheduledAt           DateTime?
+  sentAt                DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   creator             User                         @relation("CampaignCreator", fields: [createdById], references: [id], onDelete: Restrict)
   approver            User?                        @relation("CampaignApprover", fields: [approvedById], references: [id], onDelete: Restrict)
@@ -1108,6 +1175,118 @@ model CampaignTestApproval {
   @@index([campaignId])
   @@index([contentHash])
   @@index([consumedAt])
+}
+
+// ============================================================================
+// QA EMAIL LEDGER (ADR-0028) — durable, delete-protected
+// ============================================================================
+//
+// A DEDICATED pair of tables, deliberately not `CampaignTestSend`.
+//
+// ADR-0027 stored QA sends on `CampaignTestSend`, sharing a table that integration
+// suites clean. A suite's cleanup then deleted the evidence of twenty real emails and
+// silently restored the send quota that depends on counting them. Separating the
+// tables makes that class of accident impossible rather than merely discouraged: no
+// test touches these models, and the repository refuses to delete a LIVE row at all.
+
+/// One deliberate QA campaign. Opened by an ADMIN, never implicitly.
+/// A human rendering observation about an ALREADY-SENT QA message (ADR-0030).
+///
+/// Recording a review NEVER resends anything: this table has no transport, no
+/// recipient and no provider field. It exists so that "did the Arabic render
+/// correctly?" has an answer somebody wrote down, rather than an assumption.
+model QaReviewCheck {
+  id       String @id @default(cuid())
+  sendId   String
+  /// Stable key from the scenario's own inspection list.
+  checkKey String
+  /// The human-readable check, snapshotted so a later catalogue edit cannot silently
+  /// change what a reviewer said PASS to.
+  label    String
+
+  status   QaCheckStatus     @default(NOT_CHECKED)
+  severity QaDefectSeverity?
+  note     String?
+
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  send       QaEmailSend @relation(fields: [sendId], references: [id], onDelete: Cascade)
+  reviewedBy User?       @relation("QaReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  /// One verdict per check per message. Re-reviewing updates it rather than stacking.
+  @@unique([sendId, checkKey])
+  @@index([status])
+}
+
+model QaEmailRun {
+  id           String         @id @default(cuid())
+  label        String
+  status       QaRunStatus    @default(OPEN)
+  /// LIVE runs hold real sends. A TEST_FIXTURE run exists only inside a test.
+  origin       QaRecordOrigin @default(LIVE)
+  /// Set by an automated test so its own rows can be found and removed. NULL for a
+  /// real run — which is also why a fixture-scoped delete can never match one.
+  fixtureOwner String?
+  plannedCount Int            @default(0)
+  note         String?
+  createdById  String?
+  createdAt    DateTime       @default(now())
+  closedAt     DateTime?
+  updatedAt    DateTime       @updatedAt
+
+  createdBy User?         @relation("QaRunCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  sends     QaEmailSend[]
+
+  @@index([status])
+  @@index([origin])
+  @@index([fixtureOwner])
+}
+
+/// One QA email. Append-only in practice: `providerMessageId` and `acceptedAt` are
+/// written once and never updated afterwards.
+model QaEmailSend {
+  id                String         @id @default(cuid())
+  runId             String
+  origin            QaRecordOrigin @default(LIVE)
+  /// Mirrors the run's fixture owner so a scoped cleanup can find test rows.
+  fixtureOwner      String?
+  /// One of the four allowlisted addresses. Stored verbatim as submitted.
+  recipient         String
+  subject           String
+  /// Which behaviour this message existed to test.
+  scenarioId        String
+  purpose           String
+  provider          String
+  /// The provider's own id. Written once; the repository refuses to overwrite it.
+  providerMessageId String?
+  state             QaSendState    @default(SENDING)
+  failureCode       String?
+  failureReason     String?
+  requestedAt       DateTime       @default(now())
+  acceptedAt        DateTime?
+  requestedById     String?
+  /// TRUE when this row was reconstructed from a recorded run report rather than
+  /// written at send time (ADR-0028). Never silently equivalent to a live record.
+  ledgerRecovered   Boolean        @default(false)
+  recoveryNote      String?
+  createdAt         DateTime       @default(now())
+
+  run         QaEmailRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  requestedBy User?      @relation("QaSendRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  reviews QaReviewCheck[]
+
+  /// One row per provider acceptance. A retried submit that reuses an id collides
+  /// here rather than double-counting against the cap.
+  @@unique([providerMessageId])
+  @@index([runId])
+  @@index([recipient])
+  @@index([origin])
+  @@index([fixtureOwner])
+  @@index([state])
 }
 
 // ============================================================================

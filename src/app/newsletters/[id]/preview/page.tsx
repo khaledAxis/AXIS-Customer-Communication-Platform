@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 
 import { getNewsletterPreview } from "../../../../server/services/newsletterService";
 import { getPilotStatus } from "../../../../server/services/providerPilotService";
+import { getPublicPageState } from "../../../../server/services/publicNewsletterService";
+import { togglePublicPageAction } from "../../actions";
 import { getTestSendStatus } from "../../../../server/services/testSendService";
 import { EmailPreview } from "../../../../ui/EmailPreview";
 import { LANGUAGE_LABEL } from "../../../../ui/labels";
@@ -34,6 +36,7 @@ export default async function NewsletterPreviewPage({
     pilotApproved?: string;
     pilotRevoked?: string;
     pilotSent?: string;
+    webpage?: string;
   }>;
 }) {
   // Server-side gate. The proxy redirects anonymous traffic early; this is
@@ -41,10 +44,11 @@ export default async function NewsletterPreviewPage({
   await requirePageCapability(Capability.MANAGE_NEWSLETTERS, "/newsletters");
   const { id } = await params;
   const feedback = await searchParams;
-  const [preview, testSend, pilot] = await Promise.all([
+  const [preview, testSend, pilot, publicPage] = await Promise.all([
     getNewsletterPreview(id),
     getTestSendStatus(id),
     getPilotStatus(id),
+    getPublicPageState(id),
   ]);
   if (!preview) notFound();
 
@@ -127,6 +131,16 @@ export default async function NewsletterPreviewPage({
         </div>
       ) : null}
 
+      {feedback.webpage ? (
+        <div role="status" className="mb-6 rounded-lg border border-emerald-300 bg-emerald-50 p-4">
+          <p className="text-sm font-semibold text-emerald-900">
+            {feedback.webpage === "on"
+              ? "Web version created. The email now shows a “View as webpage” link."
+              : "Web version turned off. The email no longer shows the link."}
+          </p>
+        </div>
+      ) : null}
+
       {feedback.error ? (
         <div role="alert" className="mb-6 rounded-lg border border-rose-300 bg-rose-50 p-4">
           <p className="text-sm font-semibold text-rose-900">{feedback.error}</p>
@@ -188,6 +202,79 @@ export default async function NewsletterPreviewPage({
                 <dd className="mt-0.5 text-slate-700">{doc.items.length}</dd>
               </div>
             </dl>
+          </Card>
+
+          {/* ------- Hosted web version ("View as webpage") ------- */}
+          <Card className="p-5">
+            <h2 className="text-base font-bold text-slate-900">Web version</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Most email apps block pictures until the reader allows them. A web
+              version gives them one link that always shows the newsletter in full.
+            </p>
+
+            {publicPage.enabled ? (
+              <>
+                <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {publicPage.emailUrl ? "Public address" : "Address on this machine"}
+                </p>
+                <a
+                  href={publicPage.emailUrl ?? publicPage.inspectUrl ?? "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  dir="ltr"
+                  className="mt-1 block break-all font-mono text-xs text-sky-700 underline hover:text-sky-900"
+                >
+                  {publicPage.emailUrl ?? publicPage.inspectUrl}
+                </a>
+                {publicPage.emailUrl ? (
+                  <p className="mt-2 text-xs text-slate-600">
+                    Anyone with this link can read the newsletter — no sign-in. The link
+                    carries no customer information and shows nothing but the newsletter.
+                  </p>
+                ) : (
+                  /* The page exists; the address does not leave this machine. Saying
+                     "no web version yet" here would be untrue, and would hide the page
+                     the operator just created. */
+                  <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                    <strong>Ready, but not yet reachable.</strong> This newsletter has a
+                    web version, and the address above opens it here. It is not an
+                    address a recipient could reach, so the email deliberately shows{" "}
+                    <strong>no</strong> &ldquo;View as webpage&rdquo; link. Set{" "}
+                    <code className="font-mono">PUBLIC_APP_URL</code> to the internal
+                    HTTPS address once the platform is deployed, and the link appears on
+                    its own.
+                  </p>
+                )}
+                <form action={togglePublicPageAction} className="mt-3">
+                  <input type="hidden" name="campaignId" value={id} />
+                  <input type="hidden" name="enable" value="no" />
+                  <button
+                    type="submit"
+                    className="text-xs font-semibold text-slate-600 underline hover:text-slate-800"
+                  >
+                    Turn the web version off
+                  </button>
+                </form>
+              </>
+            ) : (
+              <>
+                <p className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-700">
+                  This newsletter has no web version yet, so the email deliberately
+                  shows <strong>no</strong> &ldquo;View as webpage&rdquo; link — a link
+                  that would not open is worse than none.
+                </p>
+                <form action={togglePublicPageAction} className="mt-3">
+                  <input type="hidden" name="campaignId" value={id} />
+                  <input type="hidden" name="enable" value="yes" />
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  >
+                    Create web version
+                  </button>
+                </form>
+              </>
+            )}
           </Card>
 
           {/* ------- SAFE test send: approve, then send ------- */}

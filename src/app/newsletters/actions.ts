@@ -9,6 +9,7 @@ import {
   snapshotCampaignAudience,
 } from "../../server/services/campaignAudienceService";
 import * as newsletterService from "../../server/services/newsletterService";
+import * as publicNewsletterService from "../../server/services/publicNewsletterService";
 
 /**
  * Server actions for the newsletter builder.
@@ -147,4 +148,31 @@ export async function snapshotAudienceAction(formData: FormData): Promise<void> 
 
   await snapshotCampaignAudience(campaignId);
   revalidatePath(`/newsletters/${campaignId}`);
+}
+
+/**
+ * Turns the hosted web version of a newsletter on or off (ADR-0032).
+ *
+ * Enabling it is what makes the email's "View as webpage" link appear — the template
+ * hides that row when there is no public page, so this control and that link are the
+ * same decision expressed twice.
+ */
+export async function togglePublicPageAction(formData: FormData): Promise<void> {
+  const campaignId = formData.get("campaignId");
+  const enable = formData.get("enable");
+  if (typeof campaignId !== "string") return;
+
+  const result =
+    enable === "yes"
+      ? await publicNewsletterService.enablePublicPage(campaignId)
+      : await publicNewsletterService.disablePublicPage(campaignId);
+
+  revalidatePath(`/newsletters/${campaignId}`);
+  revalidatePath(`/newsletters/${campaignId}/preview`);
+
+  redirect(
+    result.ok
+      ? `/newsletters/${campaignId}/preview?webpage=${enable === "yes" ? "on" : "off"}`
+      : `/newsletters/${campaignId}/preview?error=${encodeURIComponent(result.message)}`,
+  );
 }

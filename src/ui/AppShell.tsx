@@ -34,6 +34,7 @@ const NAV = [
 const ADMIN_NAV = [
   { href: "/admin/users", label: "Users", icon: "🔑" },
   { href: "/admin/email-infrastructure", label: "Email setup", icon: "📡" },
+  { href: "/admin/qa-email", label: "QA email", icon: "🧪" },
 ] as const;
 
 /**

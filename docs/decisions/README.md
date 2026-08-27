@@ -60,6 +60,12 @@ default awaiting confirmation from stakeholders.
 | [0024](0024-public-unsubscribe-and-production-delivery.md) | Public tokenized unsubscribe, production delivery ledger & the disabled production provider | Accepted — **vendor still deferred (ADR-0004)** |
 | [0025](0025-resend-provider-domain-auth-and-internal-pilot.md) | **Resend** selected as the production provider, AXIS domain authentication, signed webhooks & the internal provider pilot | Accepted — **production delivery still LOCKED** |
 | [0026](0026-content-sources-review-inbox-and-assisted-automation.md) | Content sources (RSS/Atom), SSRF-guarded ingestion, the review inbox, AXIS editorial copy & assisted DRAFT automation | Accepted — **amends ADR-0023's admin-capability note**; automation never sends |
+| [0027](0027-qa-email-allowlist.md) | Internal QA email on a SEPARATE four-address allowlist, mandatory TEST subject prefix & QA-only body notice | Accepted — ledger storage **amended by ADR-0028** |
+| [0028](0028-durable-qa-ledger-and-run-caps.md) | Durable delete-protected QA ledger, LIVE vs TEST_FIXTURE records, explicit QA runs & lifetime caps | Accepted — test DB isolation **resolved by ADR-0029** |
+| [0029](0029-dedicated-test-database.md) | Dedicated `axis_ccp_test` database, fail-closed target guard & operational-URL removal in tests | Accepted — **resolves the ADR-0028 HIGH finding** |
+| [0030](0030-qa-rendering-review.md) | Human rendering-review record for already-sent QA messages (PASS / FAIL / NOT CHECKED + severity) | Accepted — **sends nothing; never writes the send ledger** |
+| [0031](0031-authenticated-browser-e2e.md) | Authenticated browser E2E (Playwright) against a production build and the test database | Accepted |
+| [0032](0032-premium-newsletter-and-public-web-version.md) | Premium newsletter proportions & a per-newsletter public web version behind an opaque token | Accepted — **no sending change**; unsubscribe prominence unchanged |
 
 ---
 

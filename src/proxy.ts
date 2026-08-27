@@ -39,6 +39,10 @@ const PUBLIC_PREFIXES = [
   // Standard Webhooks signature is the entire authorization, verified in the route
   // BEFORE the body is read; an unsigned request is refused there with 401.
   "/api/webhooks",
+  // The hosted web version of a newsletter (ADR-0032). A recipient has no AXIS
+  // account; the opaque token in the URL is the entire authorization, and it is
+  // resolved server-side. The page renders the newsletter and nothing else.
+  "/n",
 ] as const;
 
 /** Auth.js cookie names, host-prefixed variant included (used behind HTTPS). */

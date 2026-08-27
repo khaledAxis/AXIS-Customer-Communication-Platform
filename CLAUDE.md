@@ -50,6 +50,7 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | Container | **Docker** | For Postgres locally, and app image later |
 | Email (TEST) | **Gmail SMTP** via `nodemailer` | `smtp.gmail.com:465`, implicit TLS, Google **App Password**; behind the `EmailProvider` port (ADR-0014). Replies go to `NEWSLETTER_REPLY_TO` (ADR-0019) |
 | Email (production) | **Resend** via the `resend` SDK | Behind the SEPARATE `ProductionEmailProvider` port (ADR-0024/0025). Sends as `newsletter@axis-gps.com`. `DisabledProductionEmailProvider` (whose `send()` **throws**) is still the fallback whenever configuration is incomplete; **customer delivery remains LOCKED** |
+| Email (internal QA) | **Gmail SMTP** via a SEPARATE `QaEmailProvider` port | Four-address allowlist (ADR-0027); `QA_EMAIL_ENABLED` off by default. **SAFE TEST hard-lock unchanged** |
 | Public unsubscribe | **Opaque 32-byte token**, SHA-256 stored (ADR-0024) | `/unsubscribe/<token>`; GET confirms, POST records. Footer-only link, **no `List-Unsubscribe` header** |
 | CRM source | **Monday.com** (GraphQL API + webhooks) | **Source of truth**; platform is a **read-only projection** (ADR-0007) via a query-only `CrmSource` port — implemented in ADR-0017 |
 | Send safety | **Send-mode gate** (`TEST` default / `PRODUCTION`) | Server-side safe-send redirect; going live is an explicit admin action (ADR-0008) |
@@ -389,6 +390,16 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 - **Never expose the development machine to the internet** for webhooks — no port forwarding, no
   tunnel. Deploy to an internal HTTPS host and set `PUBLIC_APP_URL`. Until then delivery events do
   not arrive; that is reported, not hidden.
+  - **One narrow, audited exception exists** (2026-08-24, ADR-0032 QA): a short-lived HTTPS
+    tunnel to a **production build** of the web app, opened deliberately to test the
+    "View as webpage" link from a real inbox, with the route-authorization review run against
+    the public origin BEFORE any email was sent. Conditions that made it acceptable, all of
+    which must hold again: web app only (never PostgreSQL, never another port); `next start`
+    rather than `next dev`, because the dev server serves source maps and a stack-frame
+    endpoint that reads local files; nobody signs in through the tunnel, since the operator
+    terminates TLS and would see the session cookie; minutes, not days; and it is torn down
+    afterwards. It remains **forbidden for webhooks** — a webhook endpoint invites unsolicited
+    traffic and must live on a real internal host.
 - **Unsubscribe appearance is unchanged on this path too:** one small footer link. No
   `List-Unsubscribe`, no `List-Unsubscribe-Post`, no Gmail one-click control.
 
@@ -450,6 +461,94 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
   credentials in `.env.local` and the suite reads the same environment, so BOTH registries refuse
   a network-capable adapter under `VITEST`/`NODE_ENV=test`; the SAFE TEST port resolves to a
   transport that throws.
+
+### Internal QA email (ADR-0027)
+
+- **A THIRD port, not a widened second one.** `QaEmailProvider` is a distinct interface from
+  `EmailProvider` (SAFE TEST) and `ProductionEmailProvider` (customers). **The SAFE TEST hard-lock
+  is UNCHANGED** - still exactly one address, and it still refuses the other three QA addresses.
+  The QA adapter never calls `assertSafeTestEnvelope`, the SAFE TEST adapter never calls
+  `assertSafeQaEnvelope`; asserted against the source.
+- **The allowlist is FOUR literals** (`khaled-s@`, `moaawya@`, `info@`, `saja@axis-gps.com`) in
+  `domain/send/qaPolicy.ts`. That file imports no Prisma and never reads `CommunicationAddress`,
+  `Contact`, `Company`, `Segment`, `CampaignRecipient` or a final audience - there is no lookup to
+  redirect. `assertSafeQaEnvelope` **refuses, never repairs**, and returns the CONSTANT rather than
+  the caller's string. Refused: any other address (including on axis-gps.com), plus-aliases,
+  `Name <addr>`, comma/semicolon lists, arrays, objects, null, empty, CC, BCC, and CR/LF/tab
+  injection checked on the RAW value before trimming.
+- **Every rejection makes ZERO provider calls** - the gate runs before a provider object exists, and
+  `providerCalls` is returned as a number so tests measure it rather than trust it.
+- **Every subject begins `[AXIS Newsletter Platform TEST]`**, applied idempotently and re-checked in
+  the adapter, so a recipient identifies it from the inbox line alone.
+- **The QA body notice is opt-in and additive.** `NewsletterDocument.qaNotice` renders only when
+  set; no production or SAFE TEST path sets it, and the footer below it is byte-identical to a
+  production render - the unsubscribe affordance is unchanged, still one small footer link, still
+  no `List-Unsubscribe`.
+- **Caps are server-side, from the ledger:** 40 total and 10 per recipient, read from
+  `CampaignTestSend` rows scoped to `channel = QA_EMAIL`, never from a caller-supplied count.
+- **`QA_EMAIL_ENABLED` is environment-only, off by default**, not in the database, no UI writes it,
+  and separate from `PRODUCTION_DELIVERY_ENABLED` - enabling QA grants nothing on the customer path.
+- The UI recipient control is a fixed four-option `<select>`: no "Other", no text input, no CC/BCC
+  field. That is a courtesy; the service and the adapter each re-validate independently.
+
+### QA ledger integrity & run caps (ADR-0028)
+
+- **The QA ledger is its OWN pair of tables** (`QaEmailRun`, `QaEmailSend`), not `CampaignTestSend`.
+  ADR-0027 shared that table with data integration suites clean, and a suite's cleanup deleted the
+  rows recording twenty real emails — which, because the caps are computed by COUNTING those rows,
+  silently handed back quota. `qaEmailService.ts` no longer contains `campaignTestSend` at all.
+- **`LIVE` vs `TEST_FIXTURE` is enforced at the write.** A LIVE row **may not** carry a
+  `fixtureOwner`; a fixture row **must**. The repository refuses either violation, so a LIVE row can
+  never match a fixture-scoped delete.
+- **`deleteFixtures(owner)` is the ONLY delete path.** It pins `origin: TEST_FIXTURE` AND the
+  caller's token, and refuses an empty owner rather than matching everything. There is no
+  `deleteAll`, no raw `where`, and `deleteMany({})` against the QA ledger is **not expressible**.
+- **Quota counts LIVE rows only, re-read from the database every time.** Fixtures are invisible to
+  it. There is no in-memory counter, so a restart, a QA_EMAIL_ENABLED toggle, a test run or a table
+  clean cannot reset it. `SENDING` and `UNCERTAIN` consume quota (an unknown outcome may have been
+  delivered); `FAILED` does not.
+- **`providerMessageId` is written ONCE** and is UNIQUE. `recordResult` refuses a row that already
+  carries one — a provider acceptance is evidence and is never re-attributed. A duplicate id is
+  recorded as `UNCERTAIN`, never thrown out of the service, and never auto-retried.
+- **A send requires an OPEN run**, and a run is created only by `openQaRun` (ADMIN, `MANAGE_USERS`).
+  Nothing opens one implicitly — not a restart, a test, a ledger change or an env toggle. When live
+  sends exist, opening one requires an explicit acknowledgement that **it does not reset the
+  limits**: caps are LIFETIME per recipient, not per run.
+- **Under the test runner a send attaches ONLY to the worker's pinned fixture run**
+  (`setQaFixtureOwnerForTesting`), never to a LIVE run. Suites share a database and run in parallel;
+  without this, one suite's lifecycle test opening a LIVE run would make another suite's sends LIVE.
+  Outside the runner the rule inverts — only a LIVE run is eligible.
+- **Recovered records are labelled, never disguised.** The 2026-08-24 rows carry
+  `ledgerRecovered = true`, a `recoveryNote`, a `QA_LEDGER_RECOVERED` audit row, and a `recovered`
+  badge in the UI. Provider ids were transcribed verbatim from the run output; **none was generated**.
+- **KNOWN RISK — automated tests share the operational development database (`axis_ccp_dev`).**
+  Strict fixture ownership mitigates it; a dedicated test database is the real fix and is
+  outstanding. Treat any new suite that deletes broadly as a defect.
+
+### Premium newsletter layout & the public web version (ADR-0032)
+
+- **Proportion changed, identity did not.** Hero headline **38px** (28px mobile) against a 21px
+  secondary heading — the hero is nearly double, because a flat scale reads as a list. Gutter
+  **48px** (24px mobile), inset hairline rules, CTA at a **4px** radius with 16px×40px padding.
+  Sizes live in `TYPE`/`GUTTER` constants, not scattered through the markup. Still table-based,
+  inline-styled, `bgcolor` on the CTA for Outlook.
+- **"View as webpage" is PER-NEWSLETTER or absent.** Derived from `Campaign.publicToken`, never
+  from a single configured URL — a link promising "this message on the web" that opens something
+  else is worse than none. `BRAND_VIEW_IN_BROWSER_URL` is deprecated and unused.
+- **The link renders only when it would work.** Same deliverability rule as images (ADR-0015): no
+  token, or an origin a recipient could not reach, and the row is **omitted** — never greyed out,
+  never broken. It sits above the masthead in small muted type.
+- **`publicToken` is stored in PLAINTEXT**, unlike the unsubscribe token. Unsubscribe authorises a
+  state change and is hashed; this grants read access to public content and must reproduce the
+  same URL on every render, which a hash cannot do. 32 CSPRNG bytes, carrying no data.
+- **`/n/[token]` is public** (listed in `src/proxy.ts`) and renders the SAME `renderNewsletterHtml`
+  output inside a `sandbox`-ed iframe with **no `allow-scripts`**. It exposes no status, audience,
+  recipients or audit data, carries no navigation and no controls, and is `noindex`.
+- **Malformed, unknown and tampered tokens produce the IDENTICAL page**, so the route never becomes
+  an oracle for which newsletters exist. The TEST banner never appears there.
+- **Enabling/disabling a web version invalidates an existing SAFE TEST approval** — correct, because
+  the email HTML changed.
+- **The unsubscribe footer is UNCHANGED**: one small link, same place, no `List-Unsubscribe`.
 
 ### Contact consent / eligibility (never email the wrong person)
 
@@ -595,6 +694,42 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   (> 20,000 rows) is reported as a WARNING rather than hidden.
 - **Accounting addresses have no code path** and can never appear in an audience, eligible or
   excluded.
+
+### Newsletter web version & premium layout (ADR-0032)
+
+- **The hero is nearly twice a secondary heading** (38px / 21px, 28px on a phone), the
+  gutter is **48px** desktop / 24px mobile, and the CTA is a **4px radius** solid
+  button — not the old pill. Sizes live in `TYPE` and `GUTTER` in
+  `domain/email/newsletterTemplate.ts`, so the proportions are one readable decision.
+  A flat type scale makes a newsletter read as a list; that gap IS the featured article.
+- **The featured article carries the only filled button.** Secondary items get a small
+  "read more" link. Two competing buttons flatten the hierarchy everything else builds.
+- **"View as webpage" is per-newsletter, or absent.** `Campaign.publicToken` is 32
+  CSPRNG bytes, base64url, carrying no data, stored in **plaintext** — unlike the
+  unsubscribe token, because this grants read access to public content and the same URL
+  must be reproducible on every render, which a hash cannot do.
+- The link renders **only when it would work**. No token, or an origin a recipient
+  could not reach, and the row is **omitted entirely** — never greyed out. Same
+  deliverability rule as images (ADR-0015).
+- **"Reachable" excludes the whole private network, not just loopback.**
+  `isDeliverableImageUrl` refuses loopback, `10/8`, `172.16/12`, `192.168/16`,
+  link-local (incl. `169.254.169.254`), CGNAT `100.64/10`, IPv6 ULA/link-local,
+  IPv4-mapped IPv6, `.local`/`.internal`/`.lan`, and bare intranet labels with no dot.
+  A LAN address resolves perfectly on the sending machine, is dead everywhere else,
+  and tells the recipient how the sender's network is laid out.
+- **`/n/[token]` is public** (listed in `src/proxy.ts`) and renders the SAME
+  `renderNewsletterHtml` output inside a `sandbox`-ed iframe with **no `allow-scripts`**.
+  It exposes no status, audience, recipients, campaign id, navigation or controls;
+  `robots: noindex`; the TEST banner is never shown there. Malformed, unknown and
+  tampered tokens produce the **identical** page, so it is never an oracle.
+- **Existence and reachability are separate facts.** `getPublicPageState` returns
+  `enabled`, `emailUrl` (deliverable, may go in a message) and `inspectUrl` (opens on
+  this machine, **never** rendered into an email). Reporting "no web version yet" for a
+  newsletter that has one is a defect, not a simplification.
+- Enabling or disabling a web version changes the email HTML and therefore **invalidates
+  an existing SAFE TEST approval**. That is correct — the message changed.
+- `BRAND_VIEW_IN_BROWSER_URL` is deprecated and unused: one configured URL cannot be
+  true for more than one newsletter.
 
 ### Public unsubscribe (ADR-0024)
 
@@ -824,6 +959,51 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   the full audience funnel, the exclusion breakdown, and inspectable lists of eligible addresses and
   exclusions. The production control is rendered **disabled** with the reason
   *"Production customer sending has not been enabled."*
+
+### QA rendering review (ADR-0030)
+
+- **A review records an observation; it is never an action.** `qaReviewService.ts` imports no
+  provider, has no recipient field and no send path — asserted against the source — and the review
+  page has no recipient selector, scenario picker or send button. Reviewing consumes **no QA quota**.
+- **It never writes to `QaEmailSend`.** Only `QaReviewCheck`. The ledger records what was sent and
+  the caps derive from it; an opinion must never alter send history or hand back quota.
+- **`NOT_CHECKED` is the default and stays honest** — an unfilled checklist reads as unreviewed,
+  never as clean. Passed / failed / not-checked are reported separately.
+- **The checklist reuses each scenario's own `inspect` list**, and the label is SNAPSHOTTED onto the
+  review row so editing the catalogue cannot retroactively change what a reviewer approved.
+- **Severity is cleared when a check stops failing**, so a stale `CRITICAL` cannot sit on a passing
+  check and misreport closure state.
+- **A FAIL never triggers an automatic retest.** A retest is a live email to a colleague and
+  consumes quota; it needs explicit human authorisation every time.
+
+## Test Database Isolation (ADR-0029)
+
+- **Two databases, never one.** `axis_ccp_dev` is the operational development database
+  (mirrored Monday CRM, real staff accounts, consent, content, the QA ledger, audit history).
+  `axis_ccp_test` is for automated tests and holds **synthetic fixtures only**.
+  **No operational data is ever copied into the test database** — it gets schema and migrations,
+  nothing else.
+- **Selection is explicit and FAILS CLOSED.** `resolveDatabaseUrl()` branches once: under the test
+  runner it uses `TEST_DATABASE_URL`, guarded, **or throws**; otherwise `DATABASE_URL`. A missing
+  `TEST_DATABASE_URL` **never** falls back, and no code path repairs a URL into an acceptable one.
+- **`tests/setup.env.ts` DELETES `DATABASE_URL`** from the test process rather than overwriting it,
+  before any module import and therefore before any Prisma client exists. Code reaching for it finds
+  nothing rather than the operational database.
+- **The guard requires multiple signals to agree** (`domain/infra/databaseTarget.ts`): test runner
+  active AND `TEST_DATABASE_URL` configured AND a name of `axis_ccp_test` or ending in `_test`.
+  `axis_ccp_dev` is refused **by name**; so are production-looking, malformed, nameless and
+  non-Postgres targets.
+- **The same committed migrations run against the test database** via `prisma migrate deploy` —
+  never `db push`. Applying them from empty is part of what the test database proves.
+- **Cleanup stays SCOPED even in the test database.** A dedicated database is not a licence for
+  `deleteMany({})`: suites run in parallel against one database, so fixture-ownership tokens remain
+  required, and the QA `LIVE`/`TEST_FIXTURE` protections are unchanged.
+- **Automated tests may not create a QA `LIVE` record at all** — it asserts a real email was sent
+  and consumes a real recipient's quota. Refused at the repository.
+- **No live provider is constructible under the runner** — Gmail SAFE TEST, QA Gmail and Resend all
+  resolve to adapters that throw, so tests need no operational secret and CI never receives one.
+- `npm run test:db:migrate` / `npm run test:db:reset` assert their target first and **refuse
+  `axis_ccp_dev`**. There is no "reset any URL" mode. See `docs/testing.md`.
 
 ## Testing Expectations
 

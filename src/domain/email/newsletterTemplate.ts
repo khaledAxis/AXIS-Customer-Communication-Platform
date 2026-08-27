@@ -87,6 +87,14 @@ export interface NewsletterDocument {
   unsubscribeUrl?: string | null;
   /** Renders the TEST banner; production sends must set this false explicitly. */
   isTestMode: boolean;
+  /**
+   * A QA testing notice rendered at the very top of the message (ADR-0027).
+   *
+   * QA ONLY, and opt-in by construction: it renders only when a caller sets it, and
+   * NO production or SAFE TEST path does. It is deliberately not part of the normal
+   * newsletter template's content — a customer must never receive it.
+   */
+  qaNotice?: string | null;
 }
 
 interface Labels {
@@ -162,13 +170,67 @@ export function absoluteUrl(url: string | null | undefined, baseUrl: string): st
   return null; // anything else (data:, javascript:, relative junk) is refused
 }
 
-const LOCAL_HOST = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(\/|$)/i;
+/**
+ * Hosts a recipient could not reach.
+ *
+ * Loopback is the obvious case, but a PRIVATE NETWORK address is just as bad and
+ * less obvious: `http://192.168.1.20:3000/...` resolves perfectly on the machine
+ * that composed the message and is a dead link everywhere else — while also telling
+ * whoever received it how the sender's internal network is laid out. A newsletter is
+ * opened days later, on somebody else's network, so "it worked when I sent it" is
+ * not the test.
+ *
+ * Written as a list rather than one regex because each entry is a separate claim.
+ */
+const UNREACHABLE_HOST_PATTERNS: RegExp[] = [
+  /^(localhost|0\.0\.0\.0)$/i,
+  /\.localhost$/i,
+  /^127\./, // 127.0.0.0/8
+  /^10\./, // 10.0.0.0/8
+  /^192\.168\./, // 192.168.0.0/16
+  /^172\.(1[6-9]|2\d|3[01])\./, // 172.16.0.0/12
+  /^169\.254\./, // link-local, including the 169.254.169.254 metadata address
+  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, // 100.64.0.0/10 (CGNAT)
+  /^\[::1\]$/, // IPv6 loopback
+  /^\[::\]$/,
+  /^\[f[cd][0-9a-f]{2}:/i, // fc00::/7 unique-local
+  /^\[fe[89ab][0-9a-f]:/i, // fe80::/10 link-local
+  /^\[::ffff:/i, // IPv4-mapped IPv6, e.g. [::ffff:127.0.0.1]
+  /\.local$/i,
+  /\.internal$/i,
+  /\.home$/i,
+  /\.lan$/i,
+];
+
+/** A host only this machine, or only this network, can resolve. */
+function isUnreachableHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase();
+  if (host === "") return true;
+  // A bare label with no dot — `http://build-server:3000/` — is an intranet name.
+  // Bracketed IPv6 literals legitimately contain no dot, so they are excluded here
+  // and judged by the patterns above.
+  if (!host.includes(".") && !host.startsWith("[")) return true;
+  return UNREACHABLE_HOST_PATTERNS.some((pattern) => pattern.test(host));
+}
 
 /** A host only this machine can resolve is useless to a recipient. */
 export function isDeliverableImageUrl(url: string | null | undefined): boolean {
   if (!url) return false;
   if (!/^https?:\/\//i.test(url)) return false;
-  return !LOCAL_HOST.test(url);
+
+  // Host extraction without `new URL`: this module is pure and must behave
+  // identically wherever it runs. Everything after the scheme up to the first
+  // `/`, `?` or `#`, minus any credentials, minus the port.
+  const afterScheme = url.replace(/^https?:\/\//i, "");
+  const authority = afterScheme.split(/[/?#]/, 1)[0] ?? "";
+  const hostAndPort = authority.includes("@")
+    ? authority.slice(authority.lastIndexOf("@") + 1)
+    : authority;
+  const hostname = hostAndPort.startsWith("[")
+    ? hostAndPort.slice(0, hostAndPort.indexOf("]") + 1)
+    : (hostAndPort.split(":", 1)[0] ?? "");
+
+  return !isUnreachableHost(hostname);
 }
 
 /**
@@ -224,21 +286,54 @@ function ltr(raw: string): string {
   return `<span dir="ltr">${escapeHtml(raw)}</span>`;
 }
 
+/**
+ * The palette (ADR-0032).
+ *
+ * Tuned for a calmer, more premium feel than the previous set: a near-black ink that
+ * reads as considered rather than harsh, a softer canvas so the white sheet lifts off
+ * the background, and a hairline that separates without drawing a box around
+ * everything. The brand blue is unchanged — it is AXIS's, and this redesign is a
+ * change of proportion and rhythm, not of identity.
+ */
 const PALETTE = {
-  ink: "#111827",
-  body: "#374151",
-  muted: "#6b7280",
-  faint: "#9ca3af",
-  line: "#e5e7eb",
+  ink: "#0f172a",
+  body: "#3f4a5a",
+  muted: "#64748b",
+  faint: "#94a3b8",
+  line: "#e8ecf1",
+  hairline: "#eff2f6",
   brand: "#0b5cab",
   brandDark: "#0a4d8f",
   canvas: "#eef1f5",
-  band: "#f3f4f6",
+  band: "#f7f9fb",
   surface: "#ffffff",
   testBg: "#fff7ed",
   testInk: "#9a3412",
   testLine: "#fdba74",
 } as const;
+
+/**
+ * Type scale and spacing rhythm.
+ *
+ * Collected here rather than scattered through the markup so the proportions are a
+ * decision that can be read in one place. The hero is deliberately much larger than
+ * a secondary heading — a newsletter with a flat scale reads as a list, and the
+ * whole point of a featured article is that the eye lands on it first.
+ */
+const TYPE = {
+  heroHeadline: 38,
+  heroHeadlineMobile: 28,
+  heroLead: 17,
+  sectionHeading: 21,
+  body: 16,
+  bodySmall: 15,
+  kicker: 12,
+  utility: 12,
+  footer: 12,
+} as const;
+
+/** Horizontal gutter. Wider than before, which is most of the "premium" feeling. */
+const GUTTER = 48;
 
 /** Prescribed alt text for the brand logo (shown when a client blocks images). */
 export const LOGO_ALT_TEXT = "AXIS Advanced Mapping Solutions";
@@ -251,18 +346,24 @@ const WIDTH = 640;
 // ---------------------------------------------------------------------------
 
 /**
- * Pill call-to-action. Table-based so Outlook renders the fill; Outlook ignores
- * border-radius and degrades to a square button, which is acceptable.
+ * Call-to-action button (ADR-0032). A small 4px radius rather than a pill: a pill
+ * reads consumer, a restrained corner reads editorial, which is the register the rest
+ * of the layout is in.
+ *
+ * Table-based so Outlook renders the fill; Outlook ignores border-radius and degrades
+ * to a square button, which at this radius is barely a difference.
  */
 function ctaButton(href: string, label: string, dir: "rtl" | "ltr"): string {
   const align = dir === "rtl" ? "right" : "left";
   return (
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="${align}" ` +
     `style="border-collapse:separate;"><tr>` +
-    `<td bgcolor="${PALETTE.brand}" style="border-radius:28px;" align="center">` +
+    `<td bgcolor="${PALETTE.brand}" style="border-radius:4px;" align="center">` +
     `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer" ` +
-    `style="display:inline-block;padding:14px 34px;font-family:${FONT};font-size:14px;` +
-    `font-weight:bold;letter-spacing:0.6px;color:#ffffff;text-decoration:none;border-radius:28px;">` +
+    // Generous padding and a wide tracking: the button should feel deliberate and be
+    // comfortably tappable on a phone (44px+ tall including padding).
+    `style="display:inline-block;padding:16px 40px;font-family:${FONT};font-size:14px;` +
+    `font-weight:bold;letter-spacing:0.8px;color:#ffffff;text-decoration:none;border-radius:4px;">` +
     `${escapeHtml(label)}</a></td></tr></table>`
   );
 }
@@ -280,7 +381,14 @@ function spacerRow(height: number): string {
   return `<tr><td style="height:${height}px;line-height:${height}px;font-size:0;">&nbsp;</td></tr>`;
 }
 
-/** The featured (first) article: hero image, kicker, big headline, lead, CTA. */
+/**
+ * The featured article — the hero.
+ *
+ * Shaped to carry the message on its own: full-bleed image, a small brand kicker, a
+ * headline at nearly double the size of a secondary heading, one lead paragraph in a
+ * lighter weight, then a single confident call to action. The generous space above
+ * and below is what separates it from the list beneath.
+ */
 function renderFeatured(
   item: NewsletterItem,
   dir: "rtl" | "ltr",
@@ -301,59 +409,67 @@ function renderFeatured(
   }
 
   rows.push(
-    `<tr><td dir="${dir}" align="${align}" style="padding:36px 40px 0;text-align:${align};">` +
-      `<div style="font-family:${FONT};font-size:13px;font-weight:bold;letter-spacing:1.2px;` +
+    `<tr><td dir="${dir}" align="${align}" class="axis-pad" style="padding:${hero ? 44 : 40}px ${GUTTER}px 0;text-align:${align};">` +
+      `<div style="font-family:${FONT};font-size:${TYPE.kicker}px;font-weight:bold;letter-spacing:1.6px;` +
       `text-transform:uppercase;color:${PALETTE.brand};">${escapeWithLtrIsolation(kicker, dir)}</div></td></tr>`,
   );
 
   rows.push(
-    `<tr><td dir="${dir}" align="${align}" style="padding:12px 40px 0;text-align:${align};">` +
-      `<h1 style="margin:0;font-family:${FONT};font-size:30px;line-height:1.25;font-weight:bold;` +
-      `color:${PALETTE.ink};">${escapeWithLtrIsolation(headline, dir)}</h1></td></tr>`,
+    `<tr><td dir="${dir}" align="${align}" class="axis-pad" style="padding:16px ${GUTTER}px 0;text-align:${align};">` +
+      // Tight leading and a hair of negative tracking: the difference between a big
+      // headline and a headline that looks designed.
+      `<h1 class="axis-h1" style="margin:0;font-family:${FONT};font-size:${TYPE.heroHeadline}px;line-height:1.16;` +
+      `font-weight:bold;letter-spacing:-0.4px;color:${PALETTE.ink};">${escapeWithLtrIsolation(headline, dir)}</h1></td></tr>`,
   );
 
   if (item.customIntro?.trim()) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:18px 40px 0;text-align:${align};">` +
-        `<p style="margin:0;font-family:${FONT};font-size:16px;line-height:1.6;font-weight:bold;` +
-        `color:${PALETTE.ink};">${escapeWithLtrIsolation(item.customIntro, dir)}</p></td></tr>`,
+      `<tr><td dir="${dir}" align="${align}" class="axis-pad" style="padding:20px ${GUTTER}px 0;text-align:${align};">` +
+        `<p style="margin:0;font-family:${FONT};font-size:${TYPE.heroLead}px;line-height:1.6;` +
+        `color:${PALETTE.muted};">${escapeWithLtrIsolation(item.customIntro, dir)}</p></td></tr>`,
     );
   }
 
   if (item.summary?.trim()) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:18px 40px 0;text-align:${align};">` +
-        `<p style="margin:0;font-family:${FONT};font-size:16px;line-height:1.65;color:${PALETTE.body};">` +
+      `<tr><td dir="${dir}" align="${align}" class="axis-pad" style="padding:20px ${GUTTER}px 0;text-align:${align};">` +
+        `<p style="margin:0;font-family:${FONT};font-size:${TYPE.heroLead}px;line-height:1.7;color:${PALETTE.body};">` +
         `${escapeWithLtrIsolation(item.summary, dir)}</p></td></tr>`,
     );
   }
 
   if (introHtml?.trim()) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:18px 40px 0;text-align:${align};` +
-        `font-family:${FONT};font-size:16px;line-height:1.65;color:${PALETTE.body};">${introHtml}</td></tr>`,
+      `<tr><td dir="${dir}" align="${align}" class="axis-pad" style="padding:20px ${GUTTER}px 0;text-align:${align};` +
+        `font-family:${FONT};font-size:${TYPE.body}px;line-height:1.7;color:${PALETTE.body};">${introHtml}</td></tr>`,
     );
   }
 
   if (item.bodyHtml?.trim()) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:18px 40px 0;text-align:${align};` +
-        `font-family:${FONT};font-size:16px;line-height:1.65;color:${PALETTE.body};">${item.bodyHtml}</td></tr>`,
+      `<tr><td dir="${dir}" align="${align}" class="axis-pad" style="padding:20px ${GUTTER}px 0;text-align:${align};` +
+        `font-family:${FONT};font-size:${TYPE.body}px;line-height:1.7;color:${PALETTE.body};">${item.bodyHtml}</td></tr>`,
     );
   }
 
   if (link) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:28px 40px 0;">` +
+      `<tr><td dir="${dir}" align="${align}" class="axis-pad" style="padding:32px ${GUTTER}px 0;">` +
         `${ctaButton(link, labels.learnMore, dir)}</td></tr>`,
     );
   }
 
-  rows.push(spacerRow(40));
+  rows.push(spacerRow(48));
   return rows.join("");
 }
 
-/** A secondary article: compact image, title, summary, text link. */
+/**
+ * A secondary article.
+ *
+ * Deliberately quieter than the hero and consistent with its siblings: same image
+ * proportion, same heading size, same spacing above and below. Rhythm is what makes a
+ * list of articles feel composed rather than stacked.
+ */
 function renderSecondary(
   item: NewsletterItem,
   dir: "rtl" | "ltr",
@@ -369,58 +485,58 @@ function renderSecondary(
   const rows: string[] = [];
 
   if (image) {
-    rows.push(imageRow(image, item.imageAlt ?? item.title, WIDTH - 80));
-    rows.push(spacerRow(18));
+    rows.push(imageRow(image, item.imageAlt ?? item.title, WIDTH - GUTTER * 2));
+    rows.push(spacerRow(22));
   }
 
   if (item.sourceName?.trim()) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:0 0 6px;text-align:${align};">` +
-        `<span style="font-family:${FONT};font-size:12px;font-weight:bold;letter-spacing:1px;` +
-        `text-transform:uppercase;color:${PALETTE.muted};">${escapeWithLtrIsolation(item.sourceName, dir)}</span></td></tr>`,
+      `<tr><td dir="${dir}" align="${align}" style="padding:0 0 8px;text-align:${align};">` +
+        `<span style="font-family:${FONT};font-size:11px;font-weight:bold;letter-spacing:1.4px;` +
+        `text-transform:uppercase;color:${PALETTE.faint};">${escapeWithLtrIsolation(item.sourceName, dir)}</span></td></tr>`,
     );
   }
 
   rows.push(
     `<tr><td dir="${dir}" align="${align}" style="padding:0;text-align:${align};">` +
-      `<h2 style="margin:0;font-family:${FONT};font-size:20px;line-height:1.35;font-weight:bold;` +
-      `color:${PALETTE.ink};">${escapeWithLtrIsolation(heading, dir)}</h2></td></tr>`,
+      `<h2 style="margin:0;font-family:${FONT};font-size:${TYPE.sectionHeading}px;line-height:1.32;` +
+      `font-weight:bold;letter-spacing:-0.2px;color:${PALETTE.ink};">${escapeWithLtrIsolation(heading, dir)}</h2></td></tr>`,
   );
 
   if (item.customIntro?.trim()) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:10px 0 0;text-align:${align};">` +
-        `<p style="margin:0;font-family:${FONT};font-size:15px;line-height:1.6;font-style:italic;` +
+      `<tr><td dir="${dir}" align="${align}" style="padding:12px 0 0;text-align:${align};">` +
+        `<p style="margin:0;font-family:${FONT};font-size:${TYPE.bodySmall}px;line-height:1.65;` +
         `color:${PALETTE.muted};">${escapeWithLtrIsolation(item.customIntro, dir)}</p></td></tr>`,
     );
   }
 
   if (item.summary?.trim()) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:10px 0 0;text-align:${align};">` +
-        `<p style="margin:0;font-family:${FONT};font-size:15px;line-height:1.65;color:${PALETTE.body};">` +
+      `<tr><td dir="${dir}" align="${align}" style="padding:12px 0 0;text-align:${align};">` +
+        `<p style="margin:0;font-family:${FONT};font-size:${TYPE.bodySmall}px;line-height:1.7;color:${PALETTE.body};">` +
         `${escapeWithLtrIsolation(item.summary, dir)}</p></td></tr>`,
     );
   }
 
   if (item.bodyHtml?.trim()) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:10px 0 0;text-align:${align};` +
-        `font-family:${FONT};font-size:15px;line-height:1.65;color:${PALETTE.body};">${item.bodyHtml}</td></tr>`,
+      `<tr><td dir="${dir}" align="${align}" style="padding:12px 0 0;text-align:${align};` +
+        `font-family:${FONT};font-size:${TYPE.bodySmall}px;line-height:1.7;color:${PALETTE.body};">${item.bodyHtml}</td></tr>`,
     );
   }
 
   if (link) {
     rows.push(
-      `<tr><td dir="${dir}" align="${align}" style="padding:14px 0 0;text-align:${align};">` +
+      `<tr><td dir="${dir}" align="${align}" style="padding:16px 0 0;text-align:${align};">` +
         `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" ` +
-        `style="font-family:${FONT};font-size:14px;font-weight:bold;color:${PALETTE.brand};text-decoration:none;">` +
-        `${labels.readMore} ${arrow}</a></td></tr>`,
+        `style="font-family:${FONT};font-size:14px;font-weight:bold;letter-spacing:0.2px;` +
+        `color:${PALETTE.brand};text-decoration:none;">${labels.readMore} ${arrow}</a></td></tr>`,
     );
   }
 
   return (
-    `<tr><td style="padding:0 40px;">` +
+    `<tr><td class="axis-pad" style="padding:0 ${GUTTER}px;">` +
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" dir="${dir}" ` +
     `style="width:100%;border-collapse:collapse;">${rows.join("")}</table></td></tr>`
   );
@@ -438,8 +554,8 @@ function renderFooter(doc: NewsletterDocument, dir: "rtl" | "ltr", labels: Label
 
   // Wordmark — always Latin, so it is isolated and centred.
   rows.push(
-    `<tr><td align="center" style="padding:0 0 18px;">` +
-      `<span style="font-family:${FONT};font-size:20px;font-weight:bold;letter-spacing:2px;` +
+    `<tr><td align="center" style="padding:0 0 22px;">` +
+      `<span style="font-family:${FONT};font-size:18px;font-weight:bold;letter-spacing:2.4px;` +
       `color:${PALETTE.ink};">${ltr(brand.companyName)}</span></td></tr>`,
   );
 
@@ -526,7 +642,7 @@ function renderFooter(doc: NewsletterDocument, dir: "rtl" | "ltr", labels: Label
   );
 
   return (
-    `<tr><td class="axis-pad" style="padding:32px 40px 36px;background:${PALETTE.surface};border-top:1px solid ${PALETTE.line};">` +
+    `<tr><td class="axis-pad" style="padding:38px ${GUTTER}px 42px;background:${PALETTE.band};border-top:1px solid ${PALETTE.line};">` +
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" ` +
     `style="width:100%;border-collapse:collapse;">${rows.join("")}</table></td></tr>`
   );
@@ -551,20 +667,48 @@ export function renderNewsletterHtml(doc: NewsletterDocument): string {
     ? `<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;height:0;width:0;">${escapeHtml(doc.preheader)}</div>`
     : "";
 
+  /**
+   * QA testing notice (ADR-0027) — rendered ONLY when a caller explicitly sets it.
+   *
+   * Placed above everything, including the TEST banner, so a recipient sees it in the
+   * first line of the preview pane. Escaped like any other text: a notice is content,
+   * not markup, even though this platform authors it.
+   */
+  const qaNotice = doc.qaNotice?.trim()
+    ? `<tr><td dir="${dir}" align="${dir === "rtl" ? "right" : "left"}" style="padding:14px 24px;background:#eef2ff;` +
+      `border-bottom:2px solid #4f46e5;text-align:${dir === "rtl" ? "right" : "left"};font-family:${FONT};` +
+      `font-size:13px;line-height:1.55;color:#3730a3;">` +
+      `<strong style="display:block;margin-bottom:2px;">⚙ ${escapeHtml(
+        doc.language === "HE" ? "בדיקת מערכת" : doc.language === "AR" ? "اختبار النظام" : "PLATFORM TEST",
+      )}</strong>${escapeHtml(doc.qaNotice)}</td></tr>`
+    : "";
+
   const testBanner = doc.isTestMode
     ? `<tr><td dir="${dir}" align="center" style="padding:12px 24px;background:${PALETTE.testBg};` +
       `border-bottom:1px solid ${PALETTE.testLine};text-align:center;font-family:${FONT};` +
       `font-size:13px;font-weight:bold;color:${PALETTE.testInk};">${labels.testBanner}</td></tr>`
     : "";
 
-  // Top utility row — rendered only when a real, reachable page exists.
-  // Must be reachable by the RECIPIENT — a machine-local address is a dead link.
+  /**
+   * The "View as webpage" utility row (ADR-0032).
+   *
+   * Sits above the sheet, in the canvas area, in small muted type — present for
+   * anyone who needs it and quiet enough to ignore. It exists because most clients
+   * block images by default, so this is the one reliable route to the newsletter as
+   * it was designed.
+   *
+   * Rendered ONLY when the URL would actually work for the recipient. A newsletter
+   * with no public page, or an origin that resolves only on the sending machine,
+   * hides the row entirely rather than shipping a dead promise.
+   */
   const browserLink = deliverableImageUrl(doc.viewInBrowserUrl, brand.baseUrl);
   const utilityRow = browserLink
     ? `<tr><td dir="${dir}" align="${endAlign}" class="axis-pad" ` +
-      `style="padding:0 40px 10px;text-align:${endAlign};font-family:${FONT};font-size:12px;">` +
+      `style="padding:0 ${GUTTER}px 14px;text-align:${endAlign};font-family:${FONT};` +
+      `font-size:${TYPE.utility}px;line-height:1.5;color:${PALETTE.muted};">` +
       `<a href="${escapeHtml(browserLink)}" target="_blank" rel="noopener noreferrer" ` +
-      `style="color:${PALETTE.brand};text-decoration:none;font-weight:bold;">${labels.viewInBrowser}</a></td></tr>`
+      `style="color:${PALETTE.muted};text-decoration:none;letter-spacing:0.3px;` +
+      `border-bottom:1px solid ${PALETTE.line};padding-bottom:2px;">${labels.viewInBrowser}</a></td></tr>`
     : "";
 
   // Brand header: a public logo when one is configured, otherwise the AXIS text
@@ -584,16 +728,19 @@ export function renderNewsletterHtml(doc: NewsletterDocument): string {
       `font-family:${FONT};font-size:18px;font-weight:bold;letter-spacing:3px;color:#ffffff;">${ltr("AXIS")}</span>`;
 
   const header =
-    `<tr><td class="axis-pad" style="padding:22px 40px;background:${PALETTE.surface};">` +
+    `<tr><td class="axis-pad" style="padding:30px ${GUTTER}px 26px;background:${PALETTE.surface};">` +
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" dir="${dir}" ` +
     `style="width:100%;border-collapse:collapse;"><tr>` +
     `<td align="${align}" style="text-align:${align};">` +
     brandMark +
     (brand.tagline
-      ? `<div style="padding-top:8px;font-family:${FONT};font-size:12px;color:${PALETTE.muted};">` +
-        `${escapeWithLtrIsolation(brand.tagline, dir)}</div>`
+      ? `<div style="padding-top:10px;font-family:${FONT};font-size:12px;letter-spacing:0.3px;` +
+        `color:${PALETTE.muted};">${escapeWithLtrIsolation(brand.tagline, dir)}</div>`
       : "") +
-    `</td></tr></table></td></tr>`;
+    `</td></tr></table></td></tr>` +
+    // A hairline under the masthead: separates brand from story without boxing it in.
+    `<tr><td class="axis-pad" style="padding:0 ${GUTTER}px;">` +
+    `<div style="height:1px;background:${PALETTE.hairline};font-size:0;line-height:0;">&nbsp;</div></td></tr>`;
 
   const [featured, ...secondary] = doc.items;
 
@@ -601,18 +748,22 @@ export function renderNewsletterHtml(doc: NewsletterDocument): string {
     ? renderFeatured(featured, dir, labels, brand, doc.introHtml ?? null)
     : `<tr><td style="padding:40px;"></td></tr>`;
 
+  /**
+   * Separators are INSET from the gutter rather than full width, and a shade lighter
+   * than the border. They mark a change of subject without cutting the page in half.
+   */
+  const rule =
+    `<tr><td class="axis-pad" style="padding:0 ${GUTTER}px;">` +
+    `<div style="height:1px;background:${PALETTE.hairline};font-size:0;line-height:0;">&nbsp;</div></td></tr>`;
+
   const secondaryBlocks =
     secondary.length > 0
-      ? `<tr><td style="padding:0 40px;"><div style="height:1px;background:${PALETTE.line};font-size:0;line-height:0;">&nbsp;</div></td></tr>` +
-        spacerRow(36) +
+      ? rule +
+        spacerRow(40) +
         secondary
           .map((item) => renderSecondary(item, dir, labels, brand))
-          .join(
-            spacerRow(32) +
-              `<tr><td style="padding:0 40px;"><div style="height:1px;background:${PALETTE.line};font-size:0;line-height:0;">&nbsp;</div></td></tr>` +
-              spacerRow(32),
-          ) +
-        spacerRow(40)
+          .join(spacerRow(36) + rule + spacerRow(36)) +
+        spacerRow(48)
       : "";
 
   return `<!doctype html>
@@ -629,20 +780,23 @@ export function renderNewsletterHtml(doc: NewsletterDocument): string {
   /* Progressive enhancement only — every critical style is also inline. */
   @media only screen and (max-width:660px) {
     .axis-shell { width:100% !important; }
-    .axis-pad { padding-left:22px !important; padding-right:22px !important; }
-    .axis-hpad { padding-left:22px !important; padding-right:22px !important; }
-    .axis-h1 { font-size:24px !important; }
+    /* One gutter value everywhere on mobile keeps the vertical rhythm intact when the
+       page narrows — mixed padding is what makes a responsive email look improvised. */
+    .axis-pad { padding-left:24px !important; padding-right:24px !important; }
+    .axis-hpad { padding-left:24px !important; padding-right:24px !important; }
+    .axis-h1 { font-size:28px !important; line-height:1.2 !important; }
   }
 </style>
 </head>
 <body style="margin:0;padding:0;background:${PALETTE.canvas};-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
 ${preheader}
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" dir="${dir}" style="background:${PALETTE.canvas};width:100%;border-collapse:collapse;">
-<tr><td align="center" style="padding:28px 12px;">
+<tr><td align="center" style="padding:36px 12px 40px;">
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="${WIDTH}" class="axis-shell" dir="${dir}" style="width:${WIDTH}px;max-width:${WIDTH}px;border-collapse:collapse;">
 ${utilityRow}
 <tr><td style="padding:0;">
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" dir="${dir}" style="width:100%;background:${PALETTE.surface};border-collapse:collapse;border:1px solid ${PALETTE.line};">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" dir="${dir}" style="width:100%;background:${PALETTE.surface};border-collapse:collapse;border:1px solid ${PALETTE.line};border-radius:6px;">
+${qaNotice}
 ${testBanner}
 ${header}
 ${featuredBlock}
