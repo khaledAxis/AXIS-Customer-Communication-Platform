@@ -27,7 +27,10 @@ be modeled as a direct source for this platform. Initial scale is small: **~500�
 Mirrored data is frequently **incomplete** (empty Monday columns for email, phone, language,
 industry, product/brand interests). The platform must accept incomplete data without losing it, make
 gaps visible, and let staff **enrich records in Monday** over time — while **never** letting an
-incomplete, unconsented, or unsubscribed contact receive email by accident.
+ineligible, consent-denied, or unsubscribed contact receive email by accident. Under accepted
+ADR-0021, `UNKNOWN` means consent is unconfirmed and currently produces a readiness warning rather
+than an exclusion; it is never silently treated as `GRANTED` or described as sufficient for
+production.
 
 Future communication types: newsletters, product announcements, firmware/software updates, training
 invitations, webinars, events, technical alerts, promotions, follow-ups. Design the domain to
@@ -643,7 +646,9 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   does not block a send — and is never silently upgraded to `GRANTED`. `evaluateEligibility` has an
   **opt-in** `requireExplicitConsent` flag (default `false`) producing
   `ExclusionReason.CONSENT_NOT_CONFIRMED`; readiness reports the unconfirmed count as a **WARNING**.
-  Turning it on for production needs its own ADR.
+  Making `UNKNOWN` block production requires a superseding ADR and complete propagation of that
+  policy through final-audience resolution and persistence, delivery-ledger preparation, the dry
+  run, and the immediate dispatch-time veto. Changing only one layer is a safety defect.
 - **Consent never overrides the stronger facts.** `GRANTED` + unsubscribed ⇒ **INELIGIBLE**. The
   same holds for suppression, `emailStatus = INVALID`, archived sources and inactive companies. The
   consent service cannot reach `Unsubscribe` or `Suppression` — they are not in its payload.

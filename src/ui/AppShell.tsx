@@ -28,6 +28,7 @@ const NAV = [
   { href: "/segments", label: "Audiences", icon: "🎯" },
   { href: "/communication", label: "Communication", icon: "🌐" },
   { href: "/reports", label: "Reports", icon: "📊" },
+  { href: "/help", label: "Help", icon: "❓" },
 ] as const;
 
 /** Shown only to administrators. Server-side authorization is what enforces it. */
