@@ -67,7 +67,8 @@ export default defineConfig({
     // server compiles chunks on demand, which makes the browser observe transient
     // 403s on assets that are being written — noise indistinguishable from a real
     // authorization defect. A built server has no on-demand compilation and no HMR.
-    command: "npx next build && npx next start --port 3100",
+    command:
+      "npx next build && npm run desktop:prepare && node .next/standalone/server.js",
     url: "http://127.0.0.1:3100/login",
     reuseExistingServer: false,
     timeout: 420_000,
@@ -81,6 +82,8 @@ export default defineConfig({
       AUTH_URL: "http://127.0.0.1:3100",
       NEXTAUTH_URL: "http://127.0.0.1:3100",
       AUTH_TRUST_HOST: "true",
+      HOSTNAME: "127.0.0.1",
+      PORT: "3100",
       PUBLIC_APP_URL: "http://127.0.0.1:3100",
       NEXT_TELEMETRY_DISABLED: "1",
       QA_EMAIL_ENABLED: "true",

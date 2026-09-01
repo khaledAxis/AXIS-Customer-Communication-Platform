@@ -13,7 +13,9 @@ The system is small (~500–2,000 contacts); avoid infrastructure that scale doe
 
 ```mermaid
 flowchart TB
-    subgraph Client["Browser (AXIS staff)"]
+    subgraph Client["AXIS staff client"]
+        Browser["Web browser"]
+        Desktop["Windows Electron shell (optional)"]
         UI["Next.js UI — React 19, RTL (HE/AR); TEST/PROD mode indicator"]
     end
 
@@ -36,6 +38,8 @@ flowchart TB
     Ingest["External content sources [Future]"]
     AI["LLM summarization (Claude) [Future]"]
 
+    Browser --> UI
+    Desktop -->|loopback-only Next.js server| UI
     UI --> Routes
     Routes --> Services
     Services --> Domain
@@ -61,6 +65,12 @@ the CRM source of truth**, read **read-only** via the Monday GraphQL API + webho
 email provider is external, reached over HTTPS behind a port, and **all sends pass through a
 server-side safe-send gate** (ADR-0008). There is **no separate worker service, no Redis, no queue**
 yet — see §5 and ADR-0005.
+
+The optional Windows executable is a packaging shell around this same deployable, not
+a second client/server architecture (ADR-0033). It launches Next.js standalone output
+on `127.0.0.1`, uses an administrator-provisioned per-user environment file, and never
+receives client-side database, authorization, or sending authority. Production customer
+delivery remains forced off in the desktop runtime.
 
 ## 2. Domain Boundaries (layering)
 

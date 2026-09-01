@@ -66,6 +66,7 @@ default awaiting confirmation from stakeholders.
 | [0030](0030-qa-rendering-review.md) | Human rendering-review record for already-sent QA messages (PASS / FAIL / NOT CHECKED + severity) | Accepted — **sends nothing; never writes the send ledger** |
 | [0031](0031-authenticated-browser-e2e.md) | Authenticated browser E2E (Playwright) against a production build and the test database | Accepted |
 | [0032](0032-premium-newsletter-and-public-web-version.md) | Premium newsletter proportions & a per-newsletter public web version behind an opaque token | Accepted — **no sending change**; unsubscribe prominence unchanged |
+| [0033](0033-windows-desktop-wrapper.md) | Windows Electron wrapper around the self-hosted Next.js application | Accepted — **no client-side authority and no delivery activation** |
 
 ---
 

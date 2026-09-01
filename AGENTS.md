@@ -51,6 +51,7 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | Auth | **Auth.js (NextAuth v5)** `next-auth@5.0.0-beta.32` | Credentials only; JWT sessions; server-enforced RBAC (ADR-0023) |
 | Passwords | **Argon2id** via `@node-rs/argon2` | OWASP baseline; prebuilt native binding, `serverExternalPackages` |
 | Container | **Docker** | For Postgres locally, and app image later |
+| Desktop (optional) | **Electron 38** | Windows shell around traced Next.js standalone output; loopback only, external per-user secrets, production delivery forced off (ADR-0033) |
 | Email (TEST) | **Gmail SMTP** via `nodemailer` | `smtp.gmail.com:465`, implicit TLS, Google **App Password**; behind the `EmailProvider` port (ADR-0014). Replies go to `NEWSLETTER_REPLY_TO` (ADR-0019) |
 | Email (production) | **Resend** via the `resend` SDK | Behind the SEPARATE `ProductionEmailProvider` port (ADR-0024/0025). Sends as `newsletter@axis-gps.com`. `DisabledProductionEmailProvider` (whose `send()` **throws**) is still the fallback whenever configuration is incomplete; **customer delivery remains LOCKED** |
 | Email (internal QA) | **Gmail SMTP** via a SEPARATE `QaEmailProvider` port | Four-address allowlist (ADR-0027); `QA_EMAIL_ENABLED` off by default. **SAFE TEST hard-lock unchanged** |
@@ -81,6 +82,7 @@ Resend SDK are now installed and in use — the last selected in ADR-0025.)
 │       ├── README.md         # ADR process + index
 │       └── NNNN-*.md         # Individual ADRs
 ├── public/                   # Static assets
+├── electron/                 # Optional Windows wrapper + runtime config/build helpers (ADR-0033)
 ├── src/
 │   ├── app/                  # Next.js App Router (routes, layouts, route handlers)
 │   ├── domain/               # Pure domain logic: types, enums, invariants, state machines (NO I/O)
@@ -110,6 +112,21 @@ Resend SDK are now installed and in use — the last selected in ADR-0025.)
 
 Directories under `src/` beyond `app/` are created as their milestone arrives; each carries a short
 `README.md` describing its responsibility. Do not pre-create empty infrastructure.
+
+### Optional Windows desktop wrapper (ADR-0033)
+
+- Electron is a thin shell around the SAME Next.js server. It contains no business
+  logic, authorization decision, database access, or provider call of its own.
+- The packaged server is Next.js `output: "standalone"`, launched from ordinary
+  resources with Electron's Node utility process and bound only to `127.0.0.1:3210`.
+- Auth.js uses that exact origin (`AUTH_URL` and `NEXTAUTH_URL`); mixing `localhost`
+  and `127.0.0.1` breaks the cookie/redirect flow and is a defect.
+- No secret or `.env.local` is bundled. An administrator provisions the per-user
+  configuration under `%APPDATA%\AXIS Customer Communication Platform\` once.
+  Missing `DATABASE_URL`/`AUTH_SECRET`, an unavailable database, or a port conflict
+  must fail before login with an actionable error.
+- The wrapper always forces `PRODUCTION_DELIVERY_ENABLED=false`, makes no provider
+  call at startup, and is never a production-delivery activation path.
 
 ## Architecture Rules
 

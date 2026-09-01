@@ -2,10 +2,16 @@
   "name": "axis-customer-communication-platform",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "desktop:dev": "concurrently \"cross-env AUTH_URL=http://127.0.0.1:3000 NEXTAUTH_URL=http://127.0.0.1:3000 AUTH_TRUST_HOST=true npm run dev -- --hostname 127.0.0.1 --port 3000\" \"wait-on http://127.0.0.1:3000 && cross-env ELECTRON_SKIP_NEXT_SERVER=1 electron .\"",
+    "desktop:prepare": "node electron/prepare-standalone.js",
+    "desktop:build": "next build && npm run desktop:prepare && electron-builder --win portable",
+    "desktop:configure": "node electron/install-config.js",
+    "desktop:test": "node --test electron/*.test.js",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -43,12 +49,53 @@
     "@types/pg": "^8.21.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^9.2.0",
+    "cross-env": "^7.0.0",
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
     "prisma": "^7.9.1",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "wait-on": "^9.0.0"
+  },
+  "build": {
+    "appId": "com.axis.customercommunicationplatform",
+    "productName": "AXIS Customer Communication Platform",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/main.js",
+      "electron/runtime-config.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": "next",
+        "filter": [
+          "server.js",
+          "package.json",
+          ".next/**/*",
+          "public/**/*",
+          "var/**/*"
+        ]
+      },
+      {
+        "from": ".next/standalone/node_modules",
+        "to": "next/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "portable",
+      "artifactName": "axis-ccp-${version}.exe"
+    }
   },
   "overrides": {
     "next-auth": {
