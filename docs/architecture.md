@@ -70,7 +70,10 @@ The optional Windows executable is a packaging shell around this same deployable
 a second client/server architecture (ADR-0033). It launches Next.js standalone output
 on `127.0.0.1`, uses an administrator-provisioned per-user environment file, and never
 receives client-side database, authorization, or sending authority. Production customer
-delivery remains forced off in the desktop runtime.
+delivery remains forced off in the desktop runtime. Its window is pinned to the exact
+loopback application origin; external HTTP(S) links leave Electron for the system
+browser, while new windows, unsafe schemes, credentials, and alternate local origins
+are refused.
 
 ## 2. Domain Boundaries (layering)
 

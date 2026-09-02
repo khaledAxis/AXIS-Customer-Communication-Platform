@@ -45,13 +45,30 @@ npm run desktop:build
 ```
 
 The production build uses Next.js `output: "standalone"`. The traced server, public
-assets, and static chunks are packaged as ordinary resources so Electron's isolated
-Node utility process can start `server.js`; the UI loads only
+assets, and static chunks are packaged as ordinary resources so the packaged Electron
+executable's bundled Node mode can start `server.js`; the UI loads only
 `http://127.0.0.1:3210`. A second instance focuses the first one, and a port conflict
 is reported rather than attaching to an unknown local server.
 
+The AXIS window may navigate only within that exact loopback origin. New windows are
+always denied; credential-free external `http`/`https` links open in the Windows
+default browser. Other schemes, URL credentials, and unexpected local origins are
+refused.
+
 The wrapper always forces `PRODUCTION_DELIVERY_ENABLED=false`. It does not provide a
 second customer-delivery activation path and never calls an email provider at startup.
+
+Run the repeatable packaged login smoke after `desktop:build`:
+
+```bash
+npm run desktop:smoke
+```
+
+The script requires the already migrated and synthetically seeded `TEST_DATABASE_URL`,
+starts the portable EXE with every live email and CRM adapter disabled, checks the
+visible login and a real Auth.js sign-in using the synthetic E2E account, and requests
+a clean app shutdown. It refuses `axis_ccp_dev` and never prints credentials. Prepare a
+fresh fixture set with `npm run test:db:migrate` followed by `node e2e/seed.mjs`.
 
 ## Why `require` is used
 

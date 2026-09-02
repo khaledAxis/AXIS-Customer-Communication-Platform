@@ -7,9 +7,8 @@ const nextConfig: NextConfig = {
    * `require` instead. It is server-only by construction.
    */
   serverExternalPackages: ["@node-rs/argon2"],
-  allowedDevOrigins: ["192.168.2.36"],
-  // The Electron build packages this traced server outside app.asar and launches
-  // its generated server.js with Electron's isolated Node utility process.
+  // The Electron build packages this traced server outside app.asar and launches its
+  // generated server.js with the packaged Electron executable's bundled Node runtime.
   output: "standalone",
 };
 

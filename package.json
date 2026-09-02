@@ -12,6 +12,7 @@
     "desktop:build": "next build && npm run desktop:prepare && electron-builder --win portable",
     "desktop:configure": "node electron/install-config.js",
     "desktop:test": "node --test electron/*.test.js",
+    "desktop:smoke": "node electron/run-packaged-smoke.js",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -69,6 +70,7 @@
     },
     "files": [
       "electron/main.js",
+      "electron/navigation-policy.js",
       "electron/runtime-config.js",
       "package.json"
     ],

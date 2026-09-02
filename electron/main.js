@@ -1,14 +1,20 @@
 const fs = require("node:fs");
-const http = require("node:http");
+const { spawn } = require("node:child_process");
 const net = require("node:net");
 const path = require("node:path");
 
-const { app, BrowserWindow, dialog, utilityProcess } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  dialog,
+  shell,
+} = require("electron");
 
 const {
   DesktopConfigurationError,
   resolveDesktopEnvironment,
 } = require("./runtime-config");
+const { ACTION, decideNavigation } = require("./navigation-policy");
 
 const PRODUCT_DIRECTORY = "AXIS Customer Communication Platform";
 const DEVELOPMENT_PORT = 3000;
@@ -18,6 +24,8 @@ const STARTUP_TIMEOUT_MS = 45_000;
 let mainWindow;
 let nextProcess;
 let serverStopped = false;
+let isQuitting = false;
+let smokeShutdownTimer;
 
 function safeDiagnostic(value) {
   return String(value)
@@ -38,13 +46,33 @@ function originFor(port) {
 }
 
 function requestServer(url) {
+  const target = new URL(url);
   return new Promise((resolve) => {
-    const request = http.get(url, (response) => {
-      response.resume();
-      resolve(Boolean(response.statusCode && response.statusCode < 500));
+    const socket = net.createConnection({
+      host: target.hostname,
+      port: Number(target.port),
     });
-    request.setTimeout(1_000, () => request.destroy());
-    request.on("error", () => resolve(false));
+    let settled = false;
+
+    const finish = (ready) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(ready);
+    };
+
+    socket.setTimeout(1_000, () => finish(false));
+    socket.on("error", () => finish(false));
+    socket.on("connect", () => {
+      socket.write(
+        `GET ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`,
+      );
+    });
+    socket.on("data", (chunk) => {
+      const status = /^HTTP\/1\.[01] (\d{3})/.exec(chunk.toString("ascii"));
+      if (status) finish(Number(status[1]) < 500);
+    });
+    socket.on("end", () => finish(false));
   });
 }
 
@@ -81,7 +109,32 @@ function assertPortAvailable(port) {
   });
 }
 
-function createMainWindow() {
+function openExternalLink(url) {
+  shell.openExternal(url).catch(() => {
+    writeStartupLog("The system browser could not open an external link.");
+  });
+}
+
+function secureWindowNavigation(window, expectedOrigin) {
+  const guardNavigation = (event) => {
+    const decision = decideNavigation(event.url, expectedOrigin);
+    if (decision.action === ACTION.ALLOW_APPLICATION) return;
+
+    event.preventDefault();
+    if (decision.action === ACTION.OPEN_EXTERNAL) openExternalLink(decision.url);
+  };
+
+  window.webContents.on("will-navigate", guardNavigation);
+  window.webContents.on("will-redirect", guardNavigation);
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    const decision = decideNavigation(url, expectedOrigin);
+    if (decision.action === ACTION.OPEN_EXTERNAL) openExternalLink(decision.url);
+    // AXIS never creates another BrowserWindow, including for same-origin links.
+    return { action: "deny" };
+  });
+}
+
+function createMainWindow(expectedOrigin) {
   const window = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -97,11 +150,32 @@ function createMainWindow() {
     },
   });
 
+  secureWindowNavigation(window, expectedOrigin);
   window.once("ready-to-show", () => window.show());
   window.on("closed", () => {
     mainWindow = null;
   });
   return window;
+}
+
+function startSmokeShutdownWatcher() {
+  if (process.env.AXIS_DESKTOP_SMOKE !== "1") return;
+
+  const marker = process.env.AXIS_DESKTOP_SMOKE_SHUTDOWN_FILE;
+  const pidFile = process.env.AXIS_DESKTOP_SMOKE_PID_FILE;
+  if (!marker || !path.isAbsolute(marker) || !pidFile || !path.isAbsolute(pidFile)) {
+    throw new Error("The desktop smoke control paths must be absolute.");
+  }
+
+  fs.writeFileSync(pidFile, `${process.pid}\n`, { flag: "wx" });
+
+  smokeShutdownTimer = setInterval(() => {
+    if (!fs.existsSync(marker)) return;
+    clearInterval(smokeShutdownTimer);
+    smokeShutdownTimer = undefined;
+    writeStartupLog("Desktop smoke requested a clean shutdown.");
+    app.quit();
+  }, 100);
 }
 
 function showStartupError(error, configPath) {
@@ -134,22 +208,34 @@ async function startPackagedServer() {
     origin,
     port,
   });
-  // The standalone server and its traced dependencies are ordinary resources. ASAR
-  // module resolution is unavailable inside the isolated utility process.
-  environment.NODE_PATH = path.join(serverRoot, "node_modules");
+  // The standalone server and its traced dependencies are ordinary resources. The
+  // packaged Electron executable supplies its bundled Node runtime to this child.
+  const serverEnvironment = {
+    ...environment,
+    NODE_PATH: path.join(serverRoot, "node_modules"),
+    ELECTRON_RUN_AS_NODE: "1",
+  };
+  // The portable launcher variables describe the outer self-extracting wrapper.
+  // They must not be inherited by the extracted Electron executable when it is
+  // reused as the packaged server's Node runtime.
+  delete serverEnvironment.PORTABLE_EXECUTABLE_FILE;
+  delete serverEnvironment.PORTABLE_EXECUTABLE_DIR;
 
-  writeStartupLog("Starting the packaged Next.js utility process.");
-  nextProcess = utilityProcess.fork(serverEntry, [], {
+  writeStartupLog("Starting packaged Next.js with Electron's bundled Node runtime.");
+  nextProcess = spawn(process.execPath, [serverEntry], {
     cwd: serverRoot,
-    env: environment,
-    stdio: process.env.AXIS_DESKTOP_DIAGNOSTICS === "1" ? "pipe" : "ignore",
-    serviceName: "AXIS local application server",
+    env: serverEnvironment,
+    stdio: "ignore",
+    windowsHide: true,
   });
-  nextProcess.stderr?.on("data", (chunk) => writeStartupLog(`server stderr: ${chunk}`));
+  nextProcess.on("error", () => {
+    serverStopped = true;
+    writeStartupLog("Next.js server process could not start.");
+  });
   nextProcess.on("exit", (code) => {
     serverStopped = true;
-    writeStartupLog(`Next.js utility process exited with code ${code}.`);
-    if (code !== 0 && mainWindow && !mainWindow.isDestroyed()) {
+    writeStartupLog(`Next.js server process exited with code ${code}.`);
+    if (!isQuitting && code !== 0 && mainWindow && !mainWindow.isDestroyed()) {
       showStartupError(
         new Error("The local application server stopped unexpectedly."),
         expectedConfigPath,
@@ -161,7 +247,8 @@ async function startPackagedServer() {
 }
 
 async function openApplication() {
-  mainWindow = createMainWindow();
+  const applicationOrigin = originFor(app.isPackaged ? PACKAGED_PORT : DEVELOPMENT_PORT);
+  mainWindow = createMainWindow(applicationOrigin);
 
   const expectedConfigPath = path.join(
     app.getPath("appData"),
@@ -172,10 +259,11 @@ async function openApplication() {
   try {
     const desktop = app.isPackaged
       ? await startPackagedServer()
-      : { origin: originFor(DEVELOPMENT_PORT), expectedConfigPath };
+      : { origin: applicationOrigin, expectedConfigPath };
 
     await waitForNextServer(desktop.origin);
     await mainWindow.loadURL(desktop.origin);
+    writeStartupLog("AXIS BrowserWindow loaded the application origin.");
   } catch (error) {
     writeStartupLog(
       `Desktop startup failed: ${error instanceof Error ? `${error.name}: ${error.message}` : "unknown error"}`,
@@ -196,6 +284,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    startSmokeShutdownWatcher();
     openApplication().catch((error) => {
       showStartupError(error, "the per-user desktop configuration file");
       app.exit(1);
@@ -213,6 +302,8 @@ if (!hasSingleInstanceLock) {
 }
 
 app.on("before-quit", () => {
+  isQuitting = true;
+  if (smokeShutdownTimer) clearInterval(smokeShutdownTimer);
   if (nextProcess) nextProcess.kill();
 });
 

@@ -12,6 +12,10 @@ async function main() {
   try {
     const page = await browser.newPage();
     await page.goto("http://127.0.0.1:3210/login", { waitUntil: "domcontentloaded" });
+    assert.equal(new URL(page.url()).pathname, "/login");
+    await page.getByLabel(/email/i).waitFor();
+    await page.getByLabel(/password/i).waitFor();
+    await page.getByRole("button", { name: /sign in/i }).waitFor();
     await page.getByLabel(/email/i).fill(credentials.admin.email);
     await page.getByLabel(/password/i).fill(credentials.password);
     await page.getByRole("button", { name: /sign in/i }).click();

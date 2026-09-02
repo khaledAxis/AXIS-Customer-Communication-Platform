@@ -118,7 +118,8 @@ Directories under `src/` beyond `app/` are created as their milestone arrives; e
 - Electron is a thin shell around the SAME Next.js server. It contains no business
   logic, authorization decision, database access, or provider call of its own.
 - The packaged server is Next.js `output: "standalone"`, launched from ordinary
-  resources with Electron's Node utility process and bound only to `127.0.0.1:3210`.
+  resources by the packaged Electron executable's bundled Node mode
+  (`ELECTRON_RUN_AS_NODE=1`) and bound only to `127.0.0.1:3210`.
 - Auth.js uses that exact origin (`AUTH_URL` and `NEXTAUTH_URL`); mixing `localhost`
   and `127.0.0.1` breaks the cookie/redirect flow and is a defect.
 - No secret or `.env.local` is bundled. An administrator provisions the per-user
@@ -127,6 +128,12 @@ Directories under `src/` beyond `app/` are created as their milestone arrives; e
   must fail before login with an actionable error.
 - The wrapper always forces `PRODUCTION_DELIVERY_ENABLED=false`, makes no provider
   call at startup, and is never a production-delivery activation path.
+- The AXIS window may navigate only within its exact loopback application origin and
+  never creates another Electron window. Credential-free external HTTP(S) links open
+  in the system browser; unsafe schemes, credentials, and alternate local origins are
+  refused.
+- `npm run desktop:smoke` uses only the guarded test database and synthetic account,
+  disables every live email/CRM adapter, proves packaged login, and shuts down cleanly.
 
 ## Architecture Rules
 
