@@ -13,6 +13,11 @@ const listInclude = {
   _count: { select: { contentLinks: true, recipients: true, events: true, testSends: true } },
 } satisfies Prisma.CampaignInclude;
 
+async function lockDraft(tx: Prisma.TransactionClient, id: string) {
+  const rows = await tx.$queryRaw<{ status: string }[]>`SELECT status FROM "Campaign" WHERE id=${id} FOR UPDATE`;
+  if (rows[0]?.status !== "DRAFT") throw new Error("This newsletter is locked. Reload before editing.");
+}
+
 export async function listCampaigns() {
   return getPrisma().campaign.findMany({
     orderBy: [{ updatedAt: "desc" }],
@@ -41,7 +46,10 @@ export async function createCampaign(data: Prisma.CampaignCreateInput) {
 }
 
 export async function updateCampaign(id: string, data: Prisma.CampaignUpdateInput) {
-  return getPrisma().campaign.update({ where: { id }, data });
+  return getPrisma().$transaction(async tx => {
+    await lockDraft(tx, id);
+    return tx.campaign.update({ where: { id }, data });
+  });
 }
 
 /** History that must never be destroyed by a delete (mirrors the RESTRICT FKs). */
@@ -56,7 +64,10 @@ export async function campaignHistoryCount(id: string) {
 }
 
 export async function deleteCampaign(id: string) {
-  return getPrisma().campaign.delete({ where: { id } });
+  return getPrisma().$transaction(async tx => {
+    await lockDraft(tx, id);
+    return tx.campaign.delete({ where: { id } });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +78,7 @@ export async function deleteCampaign(id: string) {
 export async function addContentToCampaign(campaignId: string, contentItemId: string) {
   const prisma = getPrisma();
   return prisma.$transaction(async (tx) => {
+    await lockDraft(tx, campaignId);
     const last = await tx.campaignContentItem.findFirst({
       where: { campaignId },
       orderBy: [{ position: "desc" }],
@@ -81,6 +93,7 @@ export async function addContentToCampaign(campaignId: string, contentItemId: st
 export async function removeContentFromCampaign(campaignId: string, contentItemId: string) {
   const prisma = getPrisma();
   return prisma.$transaction(async (tx) => {
+    await lockDraft(tx, campaignId);
     await tx.campaignContentItem.delete({
       where: { campaignId_contentItemId: { campaignId, contentItemId } },
     });
@@ -109,6 +122,7 @@ export async function removeContentFromCampaign(campaignId: string, contentItemI
 export async function reorderCampaignContent(campaignId: string, orderedContentItemIds: string[]) {
   const prisma = getPrisma();
   return prisma.$transaction(async (tx) => {
+    await lockDraft(tx, campaignId);
     const existing = await tx.campaignContentItem.findMany({
       where: { campaignId },
       select: { id: true, contentItemId: true },
@@ -139,9 +153,11 @@ export async function setCampaignItemInclusion(
   contentItemId: string,
   isIncluded: boolean,
 ) {
-  return getPrisma().campaignContentItem.update({
-    where: { campaignId_contentItemId: { campaignId, contentItemId } },
-    data: { isIncluded },
+  return getPrisma().$transaction(async tx => {
+    await lockDraft(tx, campaignId);
+    return tx.campaignContentItem.update({
+      where: { campaignId_contentItemId: { campaignId, contentItemId } }, data: { isIncluded },
+    });
   });
 }
 

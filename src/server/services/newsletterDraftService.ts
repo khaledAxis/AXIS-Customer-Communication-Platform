@@ -47,7 +47,7 @@ export const MAX_ITEMS_PER_DRAFT = 20;
  *
  * Derived mechanically from the featured article so the draft does not open blank;
  * a person edits it before anything is approved. Deliberately NOT generated text —
- * there is no AI integration in this platform, and this milestone does not add one.
+ * subject suggestions stay mechanical, independently of reviewed article translation (ADR-0037).
  */
 export function suggestSubject(
   featuredTitle: string | null,
@@ -73,6 +73,7 @@ export function suggestPreheader(itemCount: number): string {
  */
 export async function createDraftFromContent(
   input: DraftFromContentInput,
+  automationRunId?: string,
 ): Promise<DraftResult> {
   const actor = await requireCapability(Capability.MANAGE_NEWSLETTERS);
   const prisma = getPrisma();
@@ -128,6 +129,12 @@ export async function createDraftFromContent(
   const name = input.name?.trim() || subject;
 
   const campaign = await prisma.$transaction(async (tx) => {
+    if (automationRunId) {
+      await tx.$queryRaw`SELECT id FROM "NewsletterAutomationRun" WHERE id=${automationRunId} FOR UPDATE`;
+      const run = await tx.newsletterAutomationRun.findUniqueOrThrow({ where: { id: automationRunId }, include: { automation: true } });
+      if (run.status !== "PREPARING" || run.generatedCampaignId || !run.automation.isEnabled)
+        throw new Error("This automation occurrence is no longer available for draft creation.");
+    }
     const created = await tx.campaign.create({
       data: {
         name: name.slice(0, 200),
@@ -168,6 +175,7 @@ export async function createDraftFromContent(
       },
     });
 
+    if (automationRunId) await tx.newsletterAutomationRun.update({ where: { id: automationRunId }, data: { generatedCampaignId: created.id } });
     return created;
   });
 

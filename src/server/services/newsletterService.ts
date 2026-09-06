@@ -25,6 +25,8 @@ import * as repo from "../db/repositories/campaignRepository";
 import { publicNewsletterUrl } from "../../domain/newsletter/publicPage";
 import { validatePublicAppUrl } from "../../domain/unsubscribe/publicUrl";
 import { getNewsletterBrand } from "./brandConfig";
+import { articlePlainText, normalizeArticleSource, presentArticle } from "../../domain/content/articleFormat";
+import { renderRichText, richTextToPlain } from "../../domain/content/richText";
 import { testUnsubscribeUrl } from "./unsubscribeService";
 
 /**
@@ -204,6 +206,11 @@ export interface NewsletterPreview {
 }
 
 type CampaignWithContent = NonNullable<Awaited<ReturnType<typeof repo.getCampaign>>>;
+function newsletterArticle(item: CampaignWithContent["contentLinks"][number]["contentItem"]) {
+  const source = presentArticle(item);
+  return presentArticle({ ...source, title: item.axisHeadline || source.title,
+    summary: item.axisSummary || source.summary });
+}
 
 /**
  * The configured public origin, or null when it is unusable.
@@ -220,20 +227,32 @@ function configuredPublicOrigin(): string | null {
 }
 
 export function buildNewsletterDocument(campaign: CampaignWithContent): NewsletterDocument {
+  if (campaign.dispatchDocument) {
+    // Written only by the confirmed delivery service; later library edits cannot alter history.
+    return (campaign.dispatchDocument as unknown as { document: NewsletterDocument }).document;
+  }
   const items: NewsletterItem[] = campaign.contentLinks
     .filter((link) => link.isIncluded)
-    .map((link) => ({
-      // A frozen snapshot wins over the live item — sent history must stay reproducible.
-      title: link.snapshotTitle ?? link.contentItem.title,
-      summary: link.contentItem.summary,
-      bodyHtml: link.snapshotBodyHtml ?? link.contentItem.bodyHtml,
-      imageUrl: link.contentItem.imageUrl,
-      imageAlt: link.contentItem.imageAlt,
-      externalUrl: link.snapshotExternalUrl ?? link.contentItem.externalUrl,
-      sourceName: link.contentItem.sourceName ?? link.contentItem.source?.name ?? null,
-      customHeading: link.customHeading,
-      customIntro: link.customIntro,
-    }));
+    .map((link) => {
+      const frozen = link.snapshotAt !== null;
+      const item = frozen ? link.contentItem : newsletterArticle(link.contentItem);
+      const body = normalizeArticleSource(item.bodyText, item.externalUrl);
+      return {
+        // A frozen snapshot wins over the live item — sent history must stay reproducible.
+        title: link.snapshotTitle ?? item.title,
+        summary: item.summary,
+        bodyHtml: link.snapshotBodyHtml ?? (!frozen && body.format === "HTML"
+          ? renderRichText(body.source, campaign.language === "UNKNOWN" ? "ltr" : "rtl") : item.bodyHtml),
+        bodyText: !frozen ? richTextToPlain(body.source) : null,
+        imageUrl: item.imageUrl,
+        imageAlt: link.contentItem.imageAlt,
+        externalUrl: link.snapshotExternalUrl ?? ((!frozen && item.ctaUrl) || item.externalUrl),
+        ctaLabel: !frozen ? articlePlainText(item.ctaLabel) || null : null,
+        sourceName: link.contentItem.sourceName ?? link.contentItem.source?.name ?? null,
+        customHeading: link.customHeading,
+        customIntro: link.customIntro,
+      };
+    });
 
   return {
     subject: campaign.subject ?? campaign.name,
@@ -328,5 +347,11 @@ export async function getNewsletterPreview(id: string): Promise<NewsletterPrevie
 }
 
 export const listNewsletters = repo.listCampaigns;
-export const getNewsletter = repo.getCampaign;
+export async function getNewsletter(id: string) {
+  const campaign = await repo.getCampaign(id);
+  if (!campaign || campaign.status !== "DRAFT") return campaign;
+  return { ...campaign, contentLinks: campaign.contentLinks.map(link => ({ ...link,
+    contentItem: link.snapshotAt ? link.contentItem : newsletterArticle(link.contentItem),
+  })) };
+}
 export const countCampaignsByStatus = repo.countCampaignsByStatus;

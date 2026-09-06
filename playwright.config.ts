@@ -103,6 +103,11 @@ export default defineConfig({
       RESEND_WEBHOOK_SECRET: "",
       // Monday stays unreachable too, so no CRM sync can leave this process.
       MONDAY_API_TOKEN: "",
+      TRANSLATION_ENABLED: "false",
+      OPENAI_API_KEY: "",
+      CLOUDINARY_URL: "",
+      MEDIA_PROVIDER: "local",
+      AXIS_HOSTED: "false",
     },
   },
 });

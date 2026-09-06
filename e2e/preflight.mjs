@@ -31,6 +31,13 @@ const REQUIRED_DELEGATES = [
   "segment",
   "user",
   "auditLog",
+  "authRateLimit",
+  "backgroundJob",
+  "jobSchedule",
+  "schedulerHeartbeat",
+  "providerRateLimit",
+  "providerWebhookReceipt",
+  "contentTranslation",
 ];
 
 const { PrismaClient } = await import("@prisma/client");

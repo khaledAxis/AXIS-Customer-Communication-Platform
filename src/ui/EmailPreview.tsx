@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Icon } from "./Icon";
 
 /**
  * Renders the REAL generated email HTML inside a sandboxed iframe.
@@ -13,7 +14,7 @@ import { useState } from "react";
 type Device = "desktop" | "mobile";
 
 const WIDTHS: Record<Device, string> = {
-  desktop: "100%",
+  desktop: "max(100%, 680px)",
   mobile: "390px", // typical modern phone viewport
 };
 
@@ -30,8 +31,8 @@ export function EmailPreview({ html }: { html: string }) {
         >
           {(
             [
-              { value: "desktop", label: "Computer", icon: "🖥️" },
-              { value: "mobile", label: "Phone", icon: "📱" },
+              { value: "desktop", label: "Computer", icon: "monitor" },
+              { value: "mobile", label: "Phone", icon: "phone" },
             ] as const
           ).map((option) => (
             <button
@@ -45,27 +46,28 @@ export function EmailPreview({ html }: { html: string }) {
                   : "text-slate-600 hover:bg-slate-100"
               }`}
             >
-              <span aria-hidden>{option.icon}</span>
+              <Icon name={option.icon} size={17} />
               {option.label}
             </button>
           ))}
         </div>
 
         <p className="text-sm text-slate-500">
-          This is the real email, not a mock-up.
+          The same layout your readers receive.
         </p>
       </div>
 
-      <div className="flex justify-center rounded-xl border border-slate-200 bg-slate-100 p-4">
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-slate-100 p-4" role="region" aria-label="Email preview canvas" tabIndex={0}>
+        <div className="mx-auto" style={{ width: WIDTHS[device] }}>
         <iframe
           // Remounting on device change guarantees a clean re-layout.
           key={device}
           title="Newsletter preview"
           srcDoc={html}
           sandbox=""
-          style={{ width: WIDTHS[device] }}
-          className="h-[70vh] min-h-[32rem] rounded-lg border border-slate-300 bg-white shadow-sm transition-all"
+          className="h-[70vh] min-h-[32rem] w-full rounded-lg border border-slate-300 bg-white shadow-sm"
         />
+        </div>
       </div>
     </div>
   );

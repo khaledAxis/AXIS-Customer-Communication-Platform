@@ -759,9 +759,7 @@ d("send readiness", () => {
     expect(readiness?.readiness.ready).toBe(false);
     const production = readiness?.readiness.checks.find((c) => c.key === "production");
     expect(production?.status).toBe("BLOCKED");
-    expect(production?.detail).toBe(
-      "Production customer sending has not been enabled.",
-    );
+    expect(production?.detail).toContain("Customer delivery is disabled");
   });
 
   it("satisfies four-eyes when a second real person approves", async () => {

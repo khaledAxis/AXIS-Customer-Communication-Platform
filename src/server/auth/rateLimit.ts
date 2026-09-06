@@ -1,7 +1,8 @@
 import "server-only";
 
 /**
- * In-process throttle for sign-in attempts (ADR-0023).
+ * Local/desktop sign-in throttle (ADR-0023). Hosted entrypoints use the shared
+ * PostgreSQL implementation in hostedRateLimit.ts (ADR-0034).
  *
  * A login endpoint that runs Argon2 for every request is a denial-of-service target,
  * and an un-throttled one is an offline-speed password guesser. This bounds both.
@@ -9,9 +10,7 @@ import "server-only";
  * KNOWN LIMITATIONS, stated rather than hidden:
  *
  *  - state lives in this process, so it resets on restart and is not shared across
- *    instances. The platform runs as a single internal server today (ADR-0005 defers
- *    Redis until a milestone proves the need), so a shared store would be
- *    infrastructure bought before it is needed.
+ *    local/desktop instances. Hosted replicas never fall back to this map.
  *  - it is keyed by the submitted EMAIL, not the client IP. That protects an account
  *    from being ground down, which is the threat here; it does not stop a spray
  *    across many accounts from one machine. An IP-keyed limit belongs with a reverse

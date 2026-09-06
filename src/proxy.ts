@@ -52,6 +52,9 @@ const SESSION_COOKIES = [
 ] as const;
 
 function isPublic(pathname: string): boolean {
+  if (pathname === "/api/internal/jobs/tick") return true; // Dedicated bearer authentication in the route.
+  // Exact probe paths only: response bodies disclose no configuration or data.
+  if (pathname === "/api/health/live" || pathname === "/api/health/ready") return true;
   return PUBLIC_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );

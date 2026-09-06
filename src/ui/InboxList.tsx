@@ -9,6 +9,8 @@ import {
   rejectContentAction,
 } from "../app/content/inbox/actions";
 import { Badge, Card } from "./primitives";
+import { BidiText } from "./BidiText";
+import { articleDirection } from "../domain/content/inlineDirection";
 
 /**
  * The review-inbox list.
@@ -24,6 +26,7 @@ import { Badge, Card } from "./primitives";
 export interface InboxItem {
   id: string;
   title: string;
+  language: string;
   axisHeadline: string | null;
   summary: string | null;
   sourceName: string | null;
@@ -176,12 +179,12 @@ export function InboxList({
                       ) : null}
                     </div>
 
-                    <h3 className="mt-1.5 text-sm font-bold text-slate-900">
-                      {item.axisHeadline ?? item.title}
+                    <h3 dir={articleDirection(item.language)} className="mt-1.5 text-sm font-bold text-slate-900">
+                      <BidiText text={item.axisHeadline ?? item.title} dir={articleDirection(item.language)} />
                     </h3>
                     {item.axisHeadline ? (
                       <p className="mt-0.5 text-xs text-slate-500">
-                        Original title: {item.title}
+                        Original title: <span dir={articleDirection(item.language)}><BidiText text={item.title} dir={articleDirection(item.language)} /></span>
                       </p>
                     ) : null}
 
@@ -190,8 +193,8 @@ export function InboxList({
                     </p>
 
                     {item.summary ? (
-                      <p className="mt-2 line-clamp-3 text-sm text-slate-700">
-                        {item.summary}
+                      <p dir={articleDirection(item.language)} className="mt-2 line-clamp-3 text-sm text-slate-700">
+                        <BidiText text={item.summary} dir={articleDirection(item.language)} />
                       </p>
                     ) : null}
 

@@ -4,6 +4,7 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
+    "predev": "prisma generate",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
@@ -15,6 +16,7 @@
     "desktop:smoke": "node electron/run-packaged-smoke.js",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "typecheck:workflows": "tsc -p tsconfig.workflows.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "prisma generate",
@@ -25,7 +27,14 @@
     "test:db:migrate": "node scripts/migrate-test-db.mjs",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
-    "e2e:report": "playwright show-report"
+    "e2e:report": "playwright show-report",
+    "ops:manifest": "node ops/migration-manifest.mjs",
+    "ops:manifest:check": "node ops/migration-manifest.mjs --check",
+    "ops:test": "node --test ops/*.test.mjs",
+    "ops:backup": "node ops/database-backup.mjs",
+    "ops:smoke": "node ops/container-smoke.mjs",
+    "ops:worker": "node ops/worker.mjs",
+    "ops:benchmark": "cross-env OPS_BENCHMARK=true node ops/container-smoke.mjs"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.1.0",
@@ -33,9 +42,11 @@
     "@prisma/client": "^7.9.1",
     "cloudinary": "^2.10.0",
     "dotenv": "^17.4.2",
+    "jose": "6.2.9",
     "next": "16.3.1",
     "next-auth": "^5.0.0-beta.32",
     "nodemailer": "^9.0.5",
+    "parse5": "8.0.1",
     "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",

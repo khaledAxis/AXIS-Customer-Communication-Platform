@@ -16,7 +16,8 @@
  *  - pure: no I/O, no framework imports
  */
 
-import { escapeHtml, isSafeUrl } from "../content/richText";
+import { escapeHtml, escapeWithLtrIsolation, isSafeUrl } from "../content/richText";
+export { escapeWithLtrIsolation } from "../content/richText";
 import {
   EMAIL_LOGO_DISPLAY_WIDTH,
   emailDeliveryUrl,
@@ -32,6 +33,9 @@ export interface NewsletterItem {
   summary?: string | null;
   /** Pre-rendered body HTML from `renderRichText` — never raw user HTML. */
   bodyHtml?: string | null;
+  /** Plain alternative of the same normalized article source. */
+  bodyText?: string | null;
+  ctaLabel?: string | null;
   imageUrl?: string | null;
   imageAlt?: string | null;
   /** External article link — renders a call-to-action button when present. */
@@ -260,27 +264,6 @@ export function deliverableImageUrl(
  * Isolation happens on the RAW text before escaping, so an entity such as `&amp;` can
  * never be split apart.
  */
-export function escapeWithLtrIsolation(raw: string, dir: "rtl" | "ltr"): string {
-  if (dir === "ltr") return escapeHtml(raw);
-
-  // A contiguous Latin PHRASE: a Latin word plus any following Latin words joined by
-  // spaces or an ampersand. Wrapping each word separately would be noisy and would
-  // still leave the punctuation between them subject to reordering.
-  const LATIN_RUN =
-    /[A-Za-z][A-Za-z0-9@._+':/-]*(?:[ 	,&]+[A-Za-z0-9][A-Za-z0-9@._+':/-]*)*/g;
-
-  let out = "";
-  let index = 0;
-  for (const match of raw.matchAll(LATIN_RUN)) {
-    const start = match.index ?? 0;
-    out += escapeHtml(raw.slice(index, start));
-    out += `<span dir="ltr">${escapeHtml(match[0])}</span>`;
-    index = start + match[0].length;
-  }
-  out += escapeHtml(raw.slice(index));
-  return out;
-}
-
 /** Brand/contact fragments are always Latin — isolate them unconditionally. */
 function ltr(raw: string): string {
   return `<span dir="ltr">${escapeHtml(raw)}</span>`;
@@ -455,7 +438,7 @@ function renderFeatured(
   if (link) {
     rows.push(
       `<tr><td dir="${dir}" align="${align}" class="axis-pad" style="padding:32px ${GUTTER}px 0;">` +
-        `${ctaButton(link, labels.learnMore, dir)}</td></tr>`,
+        `${ctaButton(link, item.ctaLabel || labels.learnMore, dir)}</td></tr>`,
     );
   }
 
@@ -531,7 +514,7 @@ function renderSecondary(
       `<tr><td dir="${dir}" align="${align}" style="padding:16px 0 0;text-align:${align};">` +
         `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" ` +
         `style="font-family:${FONT};font-size:14px;font-weight:bold;letter-spacing:0.2px;` +
-        `color:${PALETTE.brand};text-decoration:none;">${labels.readMore} ${arrow}</a></td></tr>`,
+        `color:${PALETTE.brand};text-decoration:none;">${escapeWithLtrIsolation(item.ctaLabel || labels.readMore, dir)} ${arrow}</a></td></tr>`,
     );
   }
 
@@ -828,8 +811,9 @@ export function renderNewsletterText(doc: NewsletterDocument): string {
     const heading = item.customHeading?.trim() || item.title;
     lines.push(index === 0 ? `${heading.toUpperCase()}` : `— ${heading}`);
     if (item.summary?.trim()) lines.push(item.summary.trim());
+    if (item.bodyText?.trim()) lines.push(item.bodyText.trim());
     const link = deliverableLink(item.externalUrl, doc.brand.baseUrl);
-    if (link) lines.push(`${labels.readMore}: ${link}`);
+    if (link) lines.push(`${item.ctaLabel || labels.readMore}: ${link}`);
     lines.push("");
   }
 

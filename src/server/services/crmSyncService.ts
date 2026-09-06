@@ -11,6 +11,7 @@ import { Capability, requireCapability } from "../auth/session";
 import * as crm from "../db/repositories/crmRepository";
 import { getPrisma } from "../db/prisma";
 import { getCrmSource } from "../integrations/crm";
+import { currentJob } from "../jobs/context";
 
 /**
  * Read-only CRM synchronization (ADR-0007 / ADR-0017).
@@ -62,7 +63,7 @@ async function openRun(boardId: string, kind: "CUSTOMERS" | "CONTACTS" | "PRODUC
     update: { kind },
   });
   return prisma.syncRun.create({
-    data: { mondayBoardId: boardId, trigger: "MANUAL", status: "RUNNING" },
+    data: { mondayBoardId: boardId, trigger: currentJob() ? "SCHEDULED" : "MANUAL", status: "RUNNING" },
   });
 }
 
@@ -156,6 +157,7 @@ export async function syncCrmFromMonday(): Promise<CrmSyncSummary> {
     const summary = emptySummary(MONDAY_BOARDS.CUSTOMERS, null);
     try {
       const snapshot = await source.fetchBoard(MONDAY_BOARDS.CUSTOMERS);
+      await requireCapability(Capability.RUN_CRM_SYNC);
       summary.boardName = snapshot.boardName;
       summary.itemsRead = snapshot.items.length;
       const seen: string[] = [];
@@ -232,6 +234,7 @@ export async function syncCrmFromMonday(): Promise<CrmSyncSummary> {
     const summary = emptySummary(MONDAY_BOARDS.CONTACTS, null);
     try {
       const snapshot = await source.fetchBoard(MONDAY_BOARDS.CONTACTS);
+      await requireCapability(Capability.RUN_CRM_SYNC);
       summary.boardName = snapshot.boardName;
       summary.itemsRead = snapshot.items.length;
       const seen: string[] = [];
@@ -320,6 +323,7 @@ export async function syncCrmFromMonday(): Promise<CrmSyncSummary> {
     const summary = emptySummary(MONDAY_BOARDS.PRODUCTS, null);
     try {
       const snapshot = await source.fetchBoard(MONDAY_BOARDS.PRODUCTS);
+      await requireCapability(Capability.RUN_CRM_SYNC);
       summary.boardName = snapshot.boardName;
       summary.itemsRead = snapshot.items.length;
       const seen: string[] = [];
@@ -371,6 +375,7 @@ export async function syncCrmFromMonday(): Promise<CrmSyncSummary> {
     const summary = emptySummary(MONDAY_BOARDS.CUSTOMER_PRODUCTS, null);
     try {
       const snapshot = await source.fetchBoard(MONDAY_BOARDS.CUSTOMER_PRODUCTS);
+      await requireCapability(Capability.RUN_CRM_SYNC);
       summary.boardName = snapshot.boardName;
       summary.itemsRead = snapshot.items.length;
       const seen: string[] = [];

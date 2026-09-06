@@ -6,6 +6,17 @@ do not pull future infrastructure forward. Update this file when scope or sequen
 
 ## Sequencing note (improvements over the suggested order)
 
+**2026-09-05 operational checkpoint (ADR-0034):** the owner authorized hosted infrastructure and
+scaling foundations. Portable app/migrator/backup images, configuration validation, shared PostgreSQL
+login throttling, bounded pools, exact health probes, encrypted backup/guarded restore and a CI
+workflow are implemented. The isolated container rehearsal covers two replicas and database recovery.
+The follow-on completion in **ADR-0035** implements PostgreSQL durable scheduling, signed Monday
+webhooks, guarded customer dispatch, real delivery/engagement reports and the synthetic capacity
+benchmark. These are repository implementations with verified local execution. Host/TLS, provider
+credentials, Monday app subscriptions, external backup scheduling and alert delivery still require
+operator provisioning; no real customer release or external deployment has occurred.
+See [operations.md](operations.md) for release and recovery procedures.
+
 The brief's suggested order is sound; three dependency-driven adjustments were made:
 
 1. **A dedicated Database & ORM foundation milestone (M1) precedes Authentication** — Auth.js needs a
@@ -172,6 +183,11 @@ M11=Scheduling/production send+engagement analytics, M12=Ingestion, M13=AI.
   contact is never selected **and that unsubscribe persists across sync**.
 
 ## Milestone 11 — Scheduling, Production Sends & Engagement Analytics
+
+**Implemented in ADR-0035.** The separate Node worker consumes PostgreSQL leases; production
+dispatch, typed confirmation, live scoped eligibility, crash recovery, signed event reconciliation,
+paginated reporting and CSV export are covered by integration and browser checks. Default release
+gates stay off. See [workflow operations](workflow-operations.md) and [capacity results](capacity.md).
 
 - **Objective:** Schedule and execute real sends **safely and idempotently**; enable the explicit
   `PRODUCTION` switch; report engagement.

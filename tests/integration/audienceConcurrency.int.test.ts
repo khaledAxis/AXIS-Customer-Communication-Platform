@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import { Role } from "../../src/domain/auth/authorization";
@@ -240,17 +240,23 @@ d("final audience concurrency and readiness cost", () => {
 
   it("verifies an unchanged audience without re-resolving it", async () => {
     const prepared = await prepareFinalAudience(campaignId, randomUUID());
-    const readiness = await getSendReadiness(campaignId);
+    const watermarkCalls = vi.spyOn(await import("../../src/server/db/repositories/audienceWatermark"), "computeAudienceWatermark");
+    const { readiness, current } = await (async () => {
+      try {
+        const readiness = await getSendReadiness(campaignId);
+        expect(watermarkCalls).toHaveBeenCalledTimes(1);
+        return { readiness, current: await watermarkCalls.mock.results[0].value as string };
+      } finally { watermarkCalls.mockRestore(); }
+    })();
 
     // The watermark is GLOBAL: any CRM or communication write, from any campaign,
     // invalidates the shortcut. Other suites run in parallel against the same
-    // development database, so the contract — not one branch of it — is what is
-    // asserted here.
+    // synthetic test database. Compare the real watermark observed INSIDE readiness:
+    // another suite may write after readiness returns and before a later query.
     const stored = await prisma.campaignFinalAudience.findUniqueOrThrow({
       where: { id: prepared.finalAudienceId },
       select: { resolutionWatermark: true },
     });
-    const current = await computeAudienceWatermark(prisma, campaignId);
 
     if (stored.resolutionWatermark === current) {
       // Nothing relevant changed, so the expensive resolution must be skipped.

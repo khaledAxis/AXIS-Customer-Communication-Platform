@@ -142,6 +142,27 @@ d("content sources, review and automation", () => {
 
   // ------------------------------------------------------------- 1–3 sources
 
+  it("collects encoded article text and its hero URL without downloading the picture", async () => {
+    const sourceId = await newSource();
+    const identity = uid();
+    const requests: string[] = [];
+    setFeedFetcherForTesting(async url => {
+      requests.push(url);
+      return okFetch(`<rss version="2.0"><channel><item><title>Mixed format ${identity}</title>
+        <link>https://feeds.example.test/articles/${identity}</link><guid>${identity}</guid>
+        <description>&lt;div class="publisher-layout"&gt;&lt;img src="/pictures/hero.jpg"&gt;&lt;p&gt;Clear &lt;b&gt;surveying&lt;/b&gt; news.&lt;/p&gt;&lt;/div&gt;</description>
+        </item></channel></rss>`);
+    });
+    await ingestionService.runIngestion({ sourceIds: [sourceId] });
+    const item = await prisma.contentItem.findFirstOrThrow({ where: { sourceId } });
+    expect(item.summary).toBe("Clear surveying news.");
+    expect(item.imageUrl).toBe("https://feeds.example.test/pictures/hero.jpg");
+    expect(item.reviewState).toBe("PENDING_REVIEW");
+    expect(item.bodyHtml).toBeNull();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain("/rss");
+  });
+
   it("creates a source", async () => {
     const id = await newSource({ name: `Trimble-like ${uid()}` });
     const source = await prisma.contentSource.findUnique({ where: { id } });

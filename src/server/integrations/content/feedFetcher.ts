@@ -145,12 +145,12 @@ async function resolvesPublicly(
 /** Reads a response body with a hard byte cap, abandoning it the moment it is exceeded. */
 async function readCapped(
   response: Response,
-): Promise<{ ok: true; text: string; byteLength: number } | { ok: false }> {
+): Promise<{ ok: true; text: string; bytes: Uint8Array; byteLength: number } | { ok: false }> {
   const body = response.body;
   if (!body) {
     const text = await response.text();
     const byteLength = Buffer.byteLength(text, "utf8");
-    return byteLength > MAX_FEED_BYTES ? { ok: false } : { ok: true, text, byteLength };
+    return byteLength > MAX_FEED_BYTES ? { ok: false } : { ok: true, text, bytes: Buffer.from(text, "utf8"), byteLength };
   }
 
   const reader = body.getReader();
@@ -174,9 +174,11 @@ async function readCapped(
     return { ok: false };
   }
 
+  const bytes = Buffer.concat(chunks);
   return {
     ok: true,
-    text: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8"),
+    text: bytes.toString("utf8"),
+    bytes,
     byteLength: total,
   };
 }
@@ -329,6 +331,24 @@ export async function fetchFeed(rawUrl: string): Promise<FeedFetchResult> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Explicit image import uses the same public-DNS and streaming-size guards as feeds. */
+export async function fetchArticleImage(rawUrl: string): Promise<{ ok: true; bytes: Uint8Array } | { ok: false; message: string }> {
+  const validated = validateSourceUrl(rawUrl);
+  if (!validated.ok) return { ok: false, message: validated.message };
+  const dns = await resolvesPublicly(validated.hostname);
+  if (!dns.ok) return { ok: false, message: dns.message };
+  try {
+    const response = await fetch(validated.url, { redirect: "error", credentials: "omit", cache: "no-store", signal: AbortSignal.timeout(10_000) });
+    if (!response.ok || Number(response.headers.get("content-length") ?? 0) > MAX_FEED_BYTES) {
+      await response.body?.cancel();
+      return { ok: false, message: "That picture could not be downloaded or is too large." };
+    }
+    const read = await readCapped(response);
+    if (!read.ok || !read.byteLength) return { ok: false, message: "That picture is empty or too large to use." };
+    return { ok: true, bytes: read.bytes };
+  } catch { return { ok: false, message: "That picture could not be downloaded." }; }
 }
 
 // ---------------------------------------------------------------------------

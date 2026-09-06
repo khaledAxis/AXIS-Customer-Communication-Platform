@@ -109,14 +109,64 @@ d("content and newsletter workflow", () => {
 
     expect(stored?.bodyHtml).toContain("<h2");
     expect(stored?.bodyHtml).not.toContain("<script>alert(1)</script>");
-    expect(stored?.bodyHtml).toContain("&lt;script&gt;");
-    // The editable source is kept as written so the author can edit it again.
-    expect(stored?.bodyText).toContain("<script>alert(1)</script>");
+    expect(stored?.bodyHtml).not.toContain("alert(1)");
+    // Imported HTML is converted to editable markup; active content is discarded.
+    expect(stored?.bodyText).toBe("## Title");
+  });
+
+  it("saves mixed formats as editable markup and renders HTML and plain email alternatives", async () => {
+    const article = await newApprovedArticle({ body: '## Local heading\n\n<p>Mixed <b>formatted</b> text.</p><img src="https://example.com/photo.jpg"><blockquote>A useful quote.</blockquote>', externalUrl: 'https://example.com/article' });
+    const stored = await prisma.contentItem.findUniqueOrThrow({ where: { id: article.id } });
+    expect(stored.bodyText).not.toContain('<p>');
+    expect(stored.bodyText).toContain('**formatted**');
+    expect(stored.bodyHtml).toContain('src="https://example.com/photo.jpg"');
+    const campaign = await newNewsletter();
+    await newsletterService.addContent(campaign.id, article.id);
+    const preview = await newsletterService.getNewsletterPreview(campaign.id);
+    expect(preview?.html).toContain('<strong><span dir="ltr">formatted</span></strong>');
+    expect(preview?.text).toContain('Mixed formatted text.');
+  });
+
+  it("repairs legacy excerpts in drafts without rewriting source or frozen delivery history", async () => {
+    const article = await newApprovedArticle({ origin: 'INGESTED', body: null });
+    const raw = '&lt;div class="hs-featured-image-wrapper"&gt;&lt;img src="https://example.com/hero.jpg"&gt;&lt;/div&gt;&lt;p&gt;Clean excerpt.&lt;/p&gt;';
+    await prisma.contentItem.update({ where: { id: article.id }, data: { summary: raw, axisHeadline: 'AXIS headline', axisSummary: 'AXIS excerpt.', ctaLabel: 'Read this story', ctaUrl: 'https://example.com/story' } });
+    const campaign = await newNewsletter();
+    await newsletterService.addContent(campaign.id, article.id);
+    const draft = await newsletterService.getNewsletter(campaign.id);
+    expect(draft?.contentLinks[0].contentItem.summary).toBe('AXIS excerpt.');
+    expect(draft?.contentLinks[0].contentItem.imageUrl).toBe('https://example.com/hero.jpg');
+    const preview = await newsletterService.getNewsletterPreview(campaign.id);
+    expect(preview?.html).toContain('AXIS headline');
+    expect(preview?.html).toContain('Read this story');
+    expect(preview?.html).not.toContain('hs-featured');
+    expect((await prisma.contentItem.findUniqueOrThrow({ where: { id: article.id } })).summary).toBe(raw);
+    const loaded = await newsletterService.getNewsletter(campaign.id);
+    if (!loaded) throw new Error('fixture missing');
+    const frozen = newsletterService.buildNewsletterDocument(loaded);
+    loaded.dispatchDocument = JSON.parse(JSON.stringify({ document: frozen }));
+    loaded.contentLinks[0].contentItem.summary = 'A later source change';
+    expect(newsletterService.buildNewsletterDocument(loaded)).toEqual(frozen);
+    expect(await prisma.campaignRecipient.count({ where: { campaignId: campaign.id } })).toBe(0);
+  });
+
+  it("checks useful content length after HTML conversion and rejects oversized input", async () => {
+    const article = await newArticle({ body: `<div class="${'x'.repeat(51000)}"><p>Short article.</p></div>` });
+    expect(article.bodyText).toBe('Short article.');
+    const result = await contentService.createContent({ title: 'Too large', language: 'HE', body: 'x'.repeat(200001) });
+    expect(result.ok).toBe(false);
   });
 
   it("starts our own articles as a draft, not approved", async () => {
     const article = await newArticle();
     expect(article.reviewState).toBe("NEW");
+  });
+
+  it("refuses overly nested input instead of silently saving a partial article", async () => {
+    const result = await contentService.createContent({ title: 'Complex input', language: 'HE',
+      body: '<div>'.repeat(100) + 'Keep all my article text.' + '</div>'.repeat(100) });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors[0].message).toContain('too complex');
   });
 
   it("forces external articles to be reviewed before use", async () => {
@@ -137,7 +187,7 @@ d("content and newsletter workflow", () => {
     const stored = await contentService.getContent(article.id);
     expect(stored?.title).toBe("Updated title");
     expect(stored?.language).toBe("AR");
-    expect(stored?.bodyHtml).toContain("<strong>body</strong>");
+    expect(stored?.bodyHtml).toContain('<strong><span dir="ltr">body</span></strong>');
     // Arabic is RTL, so list/text rendering must follow the language.
     expect(stored?.bodyHtml).toContain("<p");
   });

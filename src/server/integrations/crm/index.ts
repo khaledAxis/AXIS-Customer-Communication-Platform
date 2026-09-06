@@ -11,6 +11,10 @@ let override: CrmSource | undefined;
 
 export function getCrmSource(): CrmSource {
   if (override) return override;
+  if (process.env.NODE_ENV === "test" || process.env.VITEST !== undefined) return {
+    name: "FAKE", checkConfiguration: () => ({ configured: false, problems: [], message: "Live CRM is unavailable in automated tests." }),
+    fetchBoard: async () => { throw new Error("Live CRM is unavailable in automated tests."); },
+  };
   if (!source) source = new MondayCrmSource();
   return source;
 }

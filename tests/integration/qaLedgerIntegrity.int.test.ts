@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { acquireQaQuotaTestLock } from "../support/qaQuotaLock";
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -80,6 +81,7 @@ d("QA ledger integrity", () => {
   let admin: TestUser;
   let manager: TestUser;
   let provider: RecordingQaProvider;
+  let releaseQuotaLock: (() => Promise<void>) | undefined;
   const savedEnv: Record<string, string | undefined> = {};
   /** Synthetic LIVE runs this suite seeded through SQL, removed in afterAll. */
   const syntheticRunIds: string[] = [];
@@ -154,6 +156,7 @@ d("QA ledger integrity", () => {
       : { total: 0, perRecipient: {} as Record<string, number> };
 
   beforeAll(async () => {
+    releaseQuotaLock = await acquireQaQuotaTestLock();
     admin = await createTestUser({ prefix: "qaint", role: "ADMIN" });
     manager = await createTestUser({ prefix: "qaintmgr", role: "MANAGER" });
     actAs(admin);
@@ -206,7 +209,7 @@ d("QA ledger integrity", () => {
       await prisma.qaEmailRun.deleteMany({ where: { id: { in: syntheticRunIds } } });
       await prisma.user.deleteMany({ where: { id: { in: [admin.id, manager.id] } } });
     } finally {
-      await prisma.$disconnect();
+      try { await prisma?.$disconnect(); } finally { await releaseQuotaLock?.(); }
     }
   });
 

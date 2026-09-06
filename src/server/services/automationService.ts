@@ -454,6 +454,7 @@ export async function runAutomation(
     sourceIds: sourceIds.length > 0 ? sourceIds : undefined,
   });
   const sourcesFailed = ingestion.sources.filter((s) => s.status === "FAILED").length;
+  await requireCapability(Capability.MANAGE_NEWSLETTERS);
 
   // 2. Draft from content a PERSON has already approved. Never from what arrived above.
   const candidates = await prisma.contentItem.findMany({
@@ -480,6 +481,7 @@ export async function runAutomation(
     itemsUsed: number,
     message: string | null,
   ) => {
+    await requireCapability(Capability.MANAGE_NEWSLETTERS);
     await prisma.$transaction(async (tx) => {
       await tx.newsletterAutomationRun.update({
         where: { id: run.id },
@@ -494,8 +496,8 @@ export async function runAutomation(
           errorMessage: message,
         },
       });
-      await tx.newsletterAutomation.update({
-        where: { id: automationId },
+      await tx.newsletterAutomation.updateMany({
+        where: { id: automationId, isEnabled: true, nextScheduledAt: automation.nextScheduledAt },
         data: {
           lastRunAt: new Date(),
           nextScheduledAt: nextOccurrence(
@@ -553,7 +555,7 @@ export async function runAutomation(
     contentItemIds: candidates.map((item) => item.id),
     name: `${automation.name} — ${now.toISOString().slice(0, 10)}`,
     language: automation.language,
-  });
+  }, run.id);
 
   if (!draft.ok) {
     await complete("FAILED", null, 0, draft.message);

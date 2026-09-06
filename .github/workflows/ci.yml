@@ -1,0 +1,81 @@
+name: AXIS validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: axis-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: axis_ci
+          POSTGRES_PASSWORD: synthetic-ci-only
+          POSTGRES_DB: axis_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U axis_ci -d axis_ci_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      CI: "true"
+      NEXT_TELEMETRY_DISABLED: "1"
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      TEST_DATABASE_URL: postgresql://axis_ci:synthetic-ci-only@127.0.0.1:5432/axis_ci_test
+      AUTH_SECRET: synthetic-ci-auth-secret-never-use-outside-tests-2026
+      AXIS_HOSTED: "false"
+      PRODUCTION_DELIVERY_ENABLED: "false"
+      PROVIDER_PILOT_ENABLED: "false"
+      QA_EMAIL_ENABLED: "false"
+      GMAIL_APP_PASSWORD: ""
+      RESEND_API_KEY: ""
+      RESEND_WEBHOOK_SECRET: ""
+      MONDAY_API_TOKEN: ""
+      CLOUDINARY_URL: ""
+      MEDIA_PROVIDER: local
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run db:generate
+      - run: npm run db:validate
+      - run: npm run ops:manifest:check
+      - run: npm run test:db:migrate
+      - run: npm run lint
+      - run: npx next typegen && npm run typecheck
+      - run: npm run typecheck:workflows
+      - run: npm run ops:test
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      # E2E builds and runs the standalone application on the guarded test database.
+      - run: npm run e2e
+      - name: Build portable application and operational tools
+        run: |
+          docker build --target runner --build-arg AXIS_DEPLOYMENT_ID=${{ github.sha }} -t axis-ccp:ops-foundation-local .
+          docker build --target migrator -t axis-ccp:ops-migrator-local .
+          docker build --target backup -t axis-ccp:ops-backup-local .
+          docker build --target worker -t axis-ccp:ops-worker-local .
+      - run: npm run ops:smoke
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: failure()
+        with:
+          name: synthetic-browser-failure-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -27,10 +27,10 @@ never cloned to make tests realistic.
 Prisma client can exist. It:
 
 1. loads `.env.local`;
-2. **deletes `DATABASE_URL` from the process** — not overwrites, deletes, so any code
-   reaching for it finds nothing rather than finding the operational database;
+2. **deletes the operational `DATABASE_URL` from the process** before any client loads;
 3. validates `TEST_DATABASE_URL` and fails the whole run if it is missing or unsafe;
-4. prints a credential-free banner naming the target.
+4. assigns only that validated test URL to `DATABASE_URL` for third-party tooling and
+   prints a credential-free banner naming the target.
 
 `src/server/db/prisma.ts` then resolves the connection explicitly:
 
@@ -43,6 +43,21 @@ otherwise              →  DATABASE_URL
 
 Developers do not swap environment variables before running tests. `npm test` targets
 the test database automatically.
+
+Vitest caps worker processes at four. Each process owns a bounded PostgreSQL pool;
+an unbounded worker count can exhaust a small database before tests even begin.
+The three QA integration suites hold a shared advisory lock in the guarded test
+database through fixture cleanup. QA quotas are deliberately lifetime-wide: synthetic
+LIVE evidence created by a cap test must not make another suite's allowlist send fail.
+Each waiting QA suite uses one temporary connection; other suites and within-suite
+concurrency checks remain parallel. Production quota accounting is unchanged.
+Explicit concurrency tests still exercise racing job claims, duplicate events and
+delivery attempts. Run `npm run typecheck:workflows` alongside the application typecheck
+to check the new workflow integration suite, which the application build excludes.
+
+`npm run ops:benchmark` creates its own disposable Docker database, two app replicas
+and a scheduler. It exercises only synthetic data and disabled external adapters.
+See [capacity measurements](capacity.md) and [workflow operations](workflow-operations.md).
 
 ---
 
@@ -191,7 +206,7 @@ token, not a provider key. Nothing in the suite needs them.
 # 1. stop the dev server
 # 2. npx prisma migrate deploy   (or migrate dev)
 # 3. npx prisma generate
-# 4. npm run dev
+# 4. npm run dev                (also regenerates Prisma through predev)
 ```
 
 Turbopack does **not** pick up a regenerated Prisma Client through HMR. A long-running
@@ -207,8 +222,30 @@ This has happened once, taking out five authenticated pages while the whole serv
 integration suite stayed green. If the cache seems stale, remove `.next` as well.
 
 `e2e/preflight.mjs` runs before every browser E2E run and aborts if the generated client
-is missing a delegate any page needs, so the same failure cannot reach the browser
-silently.
+is missing a delegate any page needs, including scheduler and delivery infrastructure.
+`npm run dev` regenerates the client before starting Next.js. This does not update a
+process that is already running and never applies migrations automatically. Stop and
+restart the existing server after schema changes; back up operational data before an
+explicit release migration. Never reset the operational database to repair this error.
+
+Customer readiness does not query scheduler storage when the scheduler is disabled.
+If an enabled scheduler has an outdated client or missing schema, it reports a blocked
+setup message. Unavailable scheduler storage must never permit customer sending.
+
+The shared `getPrisma()` cache is versioned by the generated datamodel, migration manifest,
+database target and pool settings. It validates every model delegate before reusing a
+client, replaces incompatible cached clients and drains their pools. It also checks that
+the imported generated module contains the workflow models/fields; creating another
+instance of obsolete generated code is not recovery. Database readiness now validates
+this running client before returning success. No report substitutes zero for unreadable
+delivery data. Regression coverage includes actual Reports queries after stale-cache
+replacement, Operations queries with a cached client missing `jobSchedule`, and refusal
+to bypass test-database isolation through a warm cache. The delegate regressions also
+cover `mondayWebhookEvent` alongside the scheduler, jobs and provider receipts.
+
+Finish Prisma generation before starting a test process that imports its generated
+files. Running tests concurrently with the `predev` generation step can observe files
+while they are being replaced; that is an invalid test run, not a service regression.
 
 ## Browser E2E (Playwright)
 
@@ -229,6 +266,19 @@ unconfigured and a send button exercises the refusal path.
 Fixtures are re-seeded by `globalSetup` before every run, because the specs deliberately
 mutate them. A suite whose result depends on how many times it has been run cannot
 report a regression.
+
+## Mixed-format articles (ADR-0036)
+
+`articleFormat.test.ts` and `feedParser.test.ts` cover plain/Markdown/HTML mixtures,
+encoded fragments, RSS/Atom/CDATA, relative images, multilingual text and safe conversion.
+`feedFetcher.test.ts` mocks DNS and HTTP to check explicit picture downloads without any
+network call. Content workflow/automation integration tests use owned synthetic fixtures
+to verify saved markup, image retention, editorial precedence, frozen documents and zero
+delivery writes. Oversized or overly nested authoring input is refused before persistence.
+
+`e2e/specs/08-article-formats.spec.ts` exercises formatted clipboard paste plus HTML-file
+import in the same article, save/reload, approval, newsletter composition and computer/phone
+preview using a synthetic picture intercepted by Playwright. No publisher is contacted.
 
 ## Manual QA rendering review
 
@@ -259,3 +309,25 @@ row. Use `origin: "TEST_FIXTURE"` with a fixture owner.
 
 **Flaky counts across suites** — a global `count()` racing with a parallel worker. Scope
 the assertion to the fixture under test rather than the whole table.
+
+## Hebrew translation checks (ADR-0037)
+
+`src/domain/content/hebrewTranslation.test.ts` checks protected identifiers, figures,
+links and structure, mixed input, complete Hebrew output and invalid-result refusal.
+The adapter contract tests strict structured requests and reject live construction in tests.
+`tests/integration/articleTranslation.int.test.ts` uses a synthetic provider and the
+guarded test database to check separate draft creation, review gates, provenance, caching,
+concurrency, source changes, request limits and failure atomicity. It makes no OpenAI call.
+`e2e/specs/09-hebrew-translation.spec.ts` checks configuration refusal, source comparison,
+mobile layout, Hebrew editing, approval and canonical email preview with synthetic fixtures.
+These checks establish workflow behavior, not the linguistic quality of real translations.
+
+The ADR-0038 copy/paste path additionally checks bounded reply parsing, signed receipt
+expiry and actor/source binding, original preservation, concurrent import reuse, stale
+source refusal and zero provider calls. `e2e/specs/10-chatgpt-translation.spec.ts` tests
+clipboard copying, malformed reply feedback, responsive layout and persisted Hebrew
+draft creation with an invented reply. ChatGPT itself is not automated or contacted.
+Source coverage tests distinguish an excerpt from a saved body and image-only input.
+The browser flow starts with a truncated excerpt, follows the full-text editor link,
+saves additional paragraphs and proves that a fresh prompt and imported draft include
+the final paragraph. Saving clears the old prompt; the server refuses stale responses.

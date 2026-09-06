@@ -23,6 +23,8 @@ const ENV_KEYS = [
   "RESEND_WEBHOOK_SECRET",
   "PROVIDER_PILOT_ENABLED",
   "PRODUCTION_DELIVERY_ENABLED",
+  "SEND_MODE",
+  "AXIS_DELIVERY_RELEASE_APPROVED",
   "NEWSLETTER_REPLY_TO",
 ] as const;
 
@@ -41,6 +43,14 @@ afterEach(() => {
 });
 
 describe("configuration reporting", () => {
+  it("refuses direct customer submission from a non-production process even with release flags", async () => {
+    process.env.PRODUCTION_DELIVERY_ENABLED = "true";
+    process.env.SEND_MODE = "PRODUCTION";
+    process.env.AXIS_DELIVERY_RELEASE_APPROVED = "true";
+    await expect(new ResendProductionEmailProvider().sendCustomer({
+      to: "synthetic@fixture.invalid", subject: "Test", html: "Test", text: "Test", idempotencyKey: "synthetic",
+    })).rejects.toThrow("Production customer delivery is locked.");
+  });
   it("reports itself unconfigured when no API key is present", () => {
     const status = new ResendProductionEmailProvider().checkConfiguration();
     expect(status.configured).toBe(false);
@@ -197,7 +207,7 @@ describe("normalizing Resend events", () => {
   });
 
   it("maps email.delivered to DELIVERED", () => {
-    const event = normalizeResendEvent({ type: "email.delivered", data: base }, "m");
+    const event = normalizeResendEvent({ type: "email.delivered", created_at: "2026-08-20T10:00:00Z", data: base }, "m");
     expect(event?.type).toBe(ProviderEventType.DELIVERED);
   });
 
@@ -205,6 +215,7 @@ describe("normalizing Resend events", () => {
     const hard = normalizeResendEvent(
       {
         type: "email.bounced",
+        created_at: "2026-08-20T10:00:00Z",
         data: { ...base, bounce: { type: "Permanent", subType: "NoEmail" } },
       },
       "m1",
@@ -212,6 +223,7 @@ describe("normalizing Resend events", () => {
     const soft = normalizeResendEvent(
       {
         type: "email.bounced",
+        created_at: "2026-08-20T10:00:00Z",
         data: { ...base, bounce: { type: "Transient", subType: "MailboxFull" } },
       },
       "m2",
@@ -225,6 +237,7 @@ describe("normalizing Resend events", () => {
     const event = normalizeResendEvent(
       {
         type: "email.complained",
+        created_at: "2026-08-20T10:00:00Z",
         data: { ...base, bounce: { type: "Permanent", subType: "Suppressed" } },
       },
       "m3",
@@ -235,21 +248,21 @@ describe("normalizing Resend events", () => {
   });
 
   it("ignores signed events the platform does not act on", () => {
-    for (const type of ["email.opened", "email.clicked", "contact.created", "wat"]) {
+    for (const type of ["contact.created", "wat"]) {
       expect(normalizeResendEvent({ type, data: base }, "m")).toBeNull();
     }
   });
 
   it("uses the delivery id as the idempotency key, so a retry is recorded once", () => {
-    const first = normalizeResendEvent({ type: "email.delivered", data: base }, "msg_7");
-    const retry = normalizeResendEvent({ type: "email.delivered", data: base }, "msg_7");
+    const first = normalizeResendEvent({ type: "email.delivered", created_at: "2026-08-20T10:00:00Z", data: base }, "msg_7");
+    const retry = normalizeResendEvent({ type: "email.delivered", created_at: "2026-08-20T10:00:00Z", data: base }, "msg_7");
     expect(first?.providerEventId).toBe("msg_7");
     expect(retry?.providerEventId).toBe(first?.providerEventId);
   });
 
   it("lower-cases the recipient so it matches a stored normalized address", () => {
     const event = normalizeResendEvent(
-      { type: "email.delivered", data: { ...base, to: ["Khaled-S@AXIS-GPS.com"] } },
+      { type: "email.delivered", created_at: "2026-08-20T10:00:00Z", data: { ...base, to: ["Khaled-S@AXIS-GPS.com"] } },
       "m",
     );
     expect(event?.normalizedEmail).toBe("khaled-s@axis-gps.com");
@@ -259,6 +272,13 @@ describe("normalizing Resend events", () => {
     expect(normalizeResendEvent({ type: "email.delivered", data: {} }, "m")).toBeNull();
     expect(normalizeResendEvent(null, "m")).toBeNull();
     expect(normalizeResendEvent("nonsense", "m")).toBeNull();
+  });
+
+  it("records opened and clicked events without inventing delivery or timestamps", () => {
+    for (const [type, expected] of [["email.opened", "OPENED"], ["email.clicked", "CLICKED"]]) {
+      expect(normalizeResendEvent({ type, created_at: "2026-08-20T10:00:00Z", data: base }, "activity")?.type).toBe(expected);
+      expect(normalizeResendEvent({ type, data: base }, "activity")).toBeNull();
+    }
   });
 });
 

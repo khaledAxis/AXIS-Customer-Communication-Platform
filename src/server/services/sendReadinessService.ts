@@ -33,13 +33,13 @@ import {
   ExclusionReason,
   Language,
 } from "../../domain/types";
-import { AUTHORIZED_TEST_SENDER } from "../../domain/send/testSendPolicy";
+import { PRODUCTION_SENDER_EMAIL } from "../../domain/delivery/pilotPolicy";
+import { currentJob } from "../jobs/context";
 import { Role } from "../../domain/auth/authorization";
 
 import { Capability, getCurrentActor, requireCapability } from "../auth/session";
 import {
   getProductionEmailProvider,
-  productionDeliveryEnabled,
   productionSendingDomain,
 } from "../integrations/email";
 import {
@@ -57,11 +57,9 @@ import { resolveAudienceForDefinition } from "./segmentService";
  * Send readiness: freezing a final audience, binding an approval to it, and
  * answering "is everything ready for production?" (ADR-0022).
  *
- * THIS SERVICE SENDS NOTHING. It has no email provider import, creates no
- * `CampaignRecipient` and no `CampaignEvent`, and the readiness checklist it produces
- * is hard-wired to report production sending as BLOCKED. Preparing an audience and
- * approving a newsletter are preparation steps; the delivery engine they are
- * preparing for does not exist yet, and nothing here can bring it into existence.
+ * This service submits no messages and creates no delivery/event rows. Its
+ * infrastructure check reports the current server release gates (ADR-0035).
+ * Preparation and approval never create a scheduled customer-delivery job.
  *
  * It also does not implement a second eligibility engine: the audience comes from
  * `resolveAudienceForDefinition`, the same path the preview panel uses, which in turn
@@ -275,12 +273,13 @@ type CampaignWithContent = NonNullable<Awaited<ReturnType<typeof getNewsletter>>
  * `[AXIS TEST]` marker. `buildNewsletterDocument` is still the one canonical
  * renderer, so what is hashed here is what the single email template would produce.
  */
-function renderProduction(campaign: CampaignWithContent): RenderedProduction {
-  const document = buildNewsletterDocument(campaign);
+export function renderProduction(campaign: CampaignWithContent): RenderedProduction {
+  const document = { ...buildNewsletterDocument(campaign), isTestMode: false };
   const included = campaign.contentLinks.filter((link) => link.isIncluded);
   const identity = getSenderIdentity();
 
-  const imageUrls = included
+  const frozen = campaign.dispatchDocument as unknown as { contentItemIds: string[]; imageUrls: string[] } | null;
+  const imageUrls = frozen?.imageUrls ?? included
     .map((link) => link.contentItem.imageUrl)
     .filter((url): url is string => typeof url === "string" && url.trim() !== "");
 
@@ -289,7 +288,7 @@ function renderProduction(campaign: CampaignWithContent): RenderedProduction {
     preheader: document.preheader ?? null,
     html: renderNewsletterHtml(document),
     text: renderNewsletterText(document),
-    contentItemIds: included.map((link) => link.contentItemId),
+    contentItemIds: frozen?.contentItemIds ?? included.map((link) => link.contentItemId),
     imageUrls,
     omittedImageCount: imageUrls.filter(
       (url) => deliverableImageUrl(url, document.brand.baseUrl) === null,
@@ -299,7 +298,7 @@ function renderProduction(campaign: CampaignWithContent): RenderedProduction {
         link.contentItem.origin === "INGESTED" &&
         link.contentItem.reviewState !== "APPROVED",
     ).length,
-    senderEmail: AUTHORIZED_TEST_SENDER,
+    senderEmail: PRODUCTION_SENDER_EMAIL,
     senderName: identity.senderName,
     replyToEmail: identity.replyToEmail,
   };
@@ -639,7 +638,7 @@ export interface SendReadinessView {
    * silent — see ADR-0023.
    */
   audienceVerifiedByWatermark: boolean;
-  /** Always false in this milestone; the UI states why. */
+  /** Server release status, distinct from approval and typed scheduling. */
   productionEnabled: boolean;
   /**
    * What still has to exist before a single customer message can go out (ADR-0024).
@@ -720,6 +719,8 @@ export async function getSendReadiness(
   const domainSnapshot = await readStoredDomainStatus(productionSendingDomain());
   const productionProvider =
     getProductionEmailProvider(domainSnapshot.status).checkConfiguration();
+  const { getCustomerReleaseStatus } = await import("./productionDispatchService");
+  const release = await getCustomerReleaseStatus();
 
   const webhookSecretConfigured =
     (process.env.RESEND_WEBHOOK_SECRET ?? "").trim() !== "";
@@ -871,7 +872,7 @@ export async function getSendReadiness(
       fourEyesSatisfied: fourEyes.satisfied,
       fourEyesProblem: fourEyes.satisfied ? null : FOUR_EYES_MESSAGE[fourEyes.reason],
     },
-    production: { enabled: false },
+    production: { enabled: release.enabled, problem: release.blockers.join(" ") },
   });
 
   return {
@@ -953,7 +954,7 @@ export async function getSendReadiness(
       problem: fourEyes.satisfied ? null : FOUR_EYES_MESSAGE[fourEyes.reason],
     },
     audienceVerifiedByWatermark: watermarkMatches,
-    productionEnabled: productionDeliveryEnabled() && productionProvider.configured,
+    productionEnabled: release.enabled,
     deliveryInfrastructure: {
       productionSender: productionProvider.senderEmail,
       providerName: productionProvider.name,
@@ -1008,12 +1009,13 @@ export type ApprovalActionResult =
  * frozen audience — a client-supplied "approved" flag is never trusted, and there is
  * no parameter through which one could be supplied.
  *
- * Recording this does NOT enable sending. Production delivery does not exist, and the
- * readiness checklist reports it as BLOCKED regardless of this row.
+ * Recording approval enables no delivery on its own. Server release checks and an
+ * independent typed scheduling instruction remain mandatory.
  */
 export async function approveForProduction(
   campaignId: string,
 ): Promise<ApprovalActionResult> {
+  if (currentJob()) throw new ReadinessError("Production approval requires a signed-in human review.");
   // Identity and permission come from the session. There is no approver parameter,
   // so a browser cannot nominate one (ADR-0023).
   const approver = await requireCapability(Capability.APPROVE_PRODUCTION);

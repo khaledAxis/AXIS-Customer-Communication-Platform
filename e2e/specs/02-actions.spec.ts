@@ -7,6 +7,7 @@ import {
   loginAsAdmin,
   loginAsManager,
   logout,
+  PageErrors,
 } from "../support";
 
 /**
@@ -636,47 +637,20 @@ test.describe("QA email", () => {
 });
 
 test.describe("QA rendering review", () => {
-  test("records PASS, then FAIL with severity, and clears severity on PASS", async ({
-    page,
-  }) => {
-    await loginAsAdmin(page);
+  test("owned synthetic sends never appear as delivered mail to review", async ({ page }) => {
+    const errors = new PageErrors(page);
+    const creds = await loginAsAdmin(page);
     await page.goto("/admin/qa-email/review");
     await expectRendered(page, /qa rendering review/i);
-
-    const form = page.locator("form").filter({ has: page.locator('select[name="status"]') }).first();
-
-    await form.locator('select[name="status"]').selectOption("PASS");
-    await form.locator('input[name="note"]').fill("Looked correct in Gmail.");
-    await form.getByRole("button", { name: /^save$/i }).click();
-
-    await page.waitForLoadState("networkidle");
+    // This board intentionally lists LIVE sends only. E2E may never fabricate a
+    // LIVE row or claim it inspected Gmail. PASS/FAIL transitions are covered by
+    // owned-fixture service tests in qaReview.int.test.ts; real rendering is manual.
+    for (const id of creds.fixtures.qaSendIds)
+      await expect(page.locator(`input[name="sendId"][value="${id}"]`)).toHaveCount(0);
     await page.reload();
-    await expect(page.getByText(/Looked correct in Gmail\./).first()).toBeVisible();
-
-    // Now fail it with a severity.
-    const form2 = page.locator("form").filter({ has: page.locator('select[name="status"]') }).first();
-    await form2.locator('select[name="status"]').selectOption("FAIL");
-    await form2.locator('select[name="severity"]').selectOption("HIGH");
-    await form2.getByRole("button", { name: /^save$/i }).click();
-
-    await page.waitForLoadState("networkidle");
-    await page.reload();
-    await expect(page.getByText("HIGH").first()).toBeVisible();
-
-    // Back to PASS — the severity must not linger.
-    const form3 = page.locator("form").filter({ has: page.locator('select[name="status"]') }).first();
-    await form3.locator('select[name="status"]').selectOption("PASS");
-    await form3.getByRole("button", { name: /^save$/i }).click();
-    await page.waitForLoadState("networkidle");
-    await page.reload();
-
-    // The severity select must be back to "—" for this check, and no HIGH badge
-    // should remain on it.
-    const form4 = page
-      .locator("form")
-      .filter({ has: page.locator('select[name="status"]') })
-      .first();
-    await expect(form4.locator('select[name="severity"]')).toHaveValue("");
+    for (const id of creds.fixtures.qaSendIds)
+      await expect(page.locator(`input[name="sendId"][value="${id}"]`)).toHaveCount(0);
+    errors.assertClean("synthetic QA evidence isolation");
   });
 
   test("the review page offers no way to send anything", async ({ page }) => {

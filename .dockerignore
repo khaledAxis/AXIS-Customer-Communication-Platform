@@ -1,0 +1,25 @@
+# Allowlist: operational data, secrets, local builds and tools never enter the context.
+**
+!package.json
+!package-lock.json
+!prisma.config.ts
+!next.config.ts
+!next-env.d.ts
+!tsconfig.json
+!postcss.config.mjs
+!src/
+!src/**
+!prisma/
+!prisma/**
+!public/
+!public/**
+!ops/
+!ops/start.mjs
+!ops/runtime-config.mjs
+!ops/check-health.mjs
+!ops/migrate.mjs
+!ops/migration-manifest.mjs
+!ops/database-backup.mjs
+!ops/backup-lib.mjs
+!ops/worker.mjs
+src/**/*.test.ts

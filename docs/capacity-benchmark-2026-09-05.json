@@ -1,0 +1,368 @@
+{
+  "timestamp": "2026-09-05T13:41:39.169Z",
+  "appImage": "axis-ccp:ops-foundation-local",
+  "environment": {
+    "platform": "win32",
+    "cpu": "12th Gen Intel(R) Core(TM) i9-12900K",
+    "logicalCpus": 24,
+    "hostMemoryGiB": 63.7,
+    "replicas": 2,
+    "poolPerReplica": 3,
+    "connectionsAtEnd": 12
+  },
+  "scope": "Synthetic local Docker HTTP responses after warm-up. No assets, browser rendering, provider throughput, or production SLA claim.",
+  "results": [
+    {
+      "campaignId": "cmtoflchv00rt01pc17hyb828",
+      "contacts": 500,
+      "companies": 500,
+      "ledgerRows": 500,
+      "concurrency": 1,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 26,
+      "p95Ms": 54,
+      "maxMs": 72,
+      "requestsPerSecond": 33.79,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 42
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 37
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 27
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 45
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 72
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 19
+        }
+      ]
+    },
+    {
+      "campaignId": "cmtoflchv00rt01pc17hyb828",
+      "contacts": 500,
+      "companies": 500,
+      "ledgerRows": 500,
+      "concurrency": 5,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 34,
+      "p95Ms": 90,
+      "maxMs": 98,
+      "requestsPerSecond": 128.07,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 54
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 47
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 48
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 45
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 98
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 12
+        }
+      ]
+    },
+    {
+      "campaignId": "cmtoflchv00rt01pc17hyb828",
+      "contacts": 500,
+      "companies": 500,
+      "ledgerRows": 500,
+      "concurrency": 10,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 48,
+      "p95Ms": 238,
+      "maxMs": 269,
+      "requestsPerSecond": 135.85,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 93
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 67
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 100
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 67
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 269
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 17
+        }
+      ]
+    },
+    {
+      "campaignId": "cmtoflg5902bd01pavmy65lqw",
+      "contacts": 2000,
+      "companies": 2000,
+      "ledgerRows": 2500,
+      "concurrency": 1,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 24,
+      "p95Ms": 70,
+      "maxMs": 81,
+      "requestsPerSecond": 34.1,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 29
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 46
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 27
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 31
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 81
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 13
+        }
+      ]
+    },
+    {
+      "campaignId": "cmtoflg5902bd01pavmy65lqw",
+      "contacts": 2000,
+      "companies": 2000,
+      "ledgerRows": 2500,
+      "concurrency": 5,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 33,
+      "p95Ms": 144,
+      "maxMs": 156,
+      "requestsPerSecond": 92.85,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 84
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 34
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 73
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 36
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 156
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 16
+        }
+      ]
+    },
+    {
+      "campaignId": "cmtoflg5902bd01pavmy65lqw",
+      "contacts": 2000,
+      "companies": 2000,
+      "ledgerRows": 2500,
+      "concurrency": 10,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 53,
+      "p95Ms": 364,
+      "maxMs": 427,
+      "requestsPerSecond": 93.53,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 114
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 63
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 127
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 54
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 427
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 13
+        }
+      ]
+    },
+    {
+      "campaignId": "cmtofllq90cch01qmw1fwrpqq",
+      "contacts": 10000,
+      "companies": 10000,
+      "ledgerRows": 12500,
+      "concurrency": 1,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 28,
+      "p95Ms": 198,
+      "maxMs": 211,
+      "requestsPerSecond": 18.3,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 39
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 30
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 28
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 46
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 211
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 20
+        }
+      ]
+    },
+    {
+      "campaignId": "cmtofllq90cch01qmw1fwrpqq",
+      "contacts": 10000,
+      "companies": 10000,
+      "ledgerRows": 12500,
+      "concurrency": 5,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 36,
+      "p95Ms": 482,
+      "maxMs": 623,
+      "requestsPerSecond": 34.49,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 216
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 33
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 191
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 36
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 623
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 14
+        }
+      ]
+    },
+    {
+      "campaignId": "cmtofllq90cch01qmw1fwrpqq",
+      "contacts": 10000,
+      "companies": 10000,
+      "ledgerRows": 12500,
+      "concurrency": 10,
+      "requests": 60,
+      "errors": 0,
+      "p50Ms": 60,
+      "p95Ms": 1274,
+      "maxMs": 1314,
+      "requestsPerSecond": 34.09,
+      "routes": [
+        {
+          "route": "/customers",
+          "p95Ms": 385
+        },
+        {
+          "route": "/communication",
+          "p95Ms": 60
+        },
+        {
+          "route": "/reports",
+          "p95Ms": 287
+        },
+        {
+          "route": "/reports/:id",
+          "p95Ms": 51
+        },
+        {
+          "route": "/newsletters/:id/readiness",
+          "p95Ms": 1314
+        },
+        {
+          "route": "/api/health/ready",
+          "p95Ms": 12
+        }
+      ]
+    }
+  ],
+  "resources": "{\"BlockIO\":\"881kB / 0B\",\"CPUPerc\":\"0.01%\",\"Container\":\"axis-ops-98fbc9b4-a\",\"ID\":\"221dfda64990\",\"MemPerc\":\"2.36%\",\"MemUsage\":\"753.3MiB / 31.2GiB\",\"Name\":\"axis-ops-98fbc9b4-a\",\"NetIO\":\"173MB / 70.7MB\",\"PIDs\":\"19\"}\n{\"BlockIO\":\"3.98MB / 0B\",\"CPUPerc\":\"0.12%\",\"Container\":\"axis-ops-98fbc9b4-b\",\"ID\":\"65fc64788f47\",\"MemPerc\":\"1.03%\",\"MemUsage\":\"330.6MiB / 31.2GiB\",\"Name\":\"axis-ops-98fbc9b4-b\",\"NetIO\":\"13.5MB / 7.46MB\",\"PIDs\":\"19\"}\n{\"BlockIO\":\"35.3MB / 174MB\",\"CPUPerc\":\"0.04%\",\"Container\":\"axis-ops-98fbc9b4-db\",\"ID\":\"ac172e7379aa\",\"MemPerc\":\"0.28%\",\"MemUsage\":\"88.96MiB / 31.2GiB\",\"Name\":\"axis-ops-98fbc9b4-db\",\"NetIO\":\"88.4MB / 186MB\",\"PIDs\":\"16\"}"
+}

@@ -50,7 +50,7 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | ORM | **Prisma** | All schema changes via migrations — **no manual DDL** |
 | Auth | **Auth.js (NextAuth v5)** `next-auth@5.0.0-beta.32` | Credentials only; JWT sessions; server-enforced RBAC (ADR-0023) |
 | Passwords | **Argon2id** via `@node-rs/argon2` | OWASP baseline; prebuilt native binding, `serverExternalPackages` |
-| Container | **Docker** | For Postgres locally, and app image later |
+| Container | **Docker** | Local Postgres; hosted standalone app, separate migrator and encrypted-backup images (ADR-0034) |
 | Desktop (optional) | **Electron 38** | Windows shell around traced Next.js standalone output; loopback only, external per-user secrets, production delivery forced off (ADR-0033) |
 | Email (TEST) | **Gmail SMTP** via `nodemailer` | `smtp.gmail.com:465`, implicit TLS, Google **App Password**; behind the `EmailProvider` port (ADR-0014). Replies go to `NEWSLETTER_REPLY_TO` (ADR-0019) |
 | Email (production) | **Resend** via the `resend` SDK | Behind the SEPARATE `ProductionEmailProvider` port (ADR-0024/0025). Sends as `newsletter@axis-gps.com`. `DisabledProductionEmailProvider` (whose `send()` **throws**) is still the fallback whenever configuration is incomplete; **customer delivery remains LOCKED** |
@@ -62,7 +62,7 @@ Approved and in use (versions are what `create-next-app` provisioned; keep them 
 | Rich text | **Restricted markup rendered server-side** | No stored client HTML; XSS-safe by construction. No WYSIWYG dependency (ADR-0012) |
 | Media | **`MediaStore` port**; **Cloudinary** hosted, local disk fallback | Selected by `MEDIA_PROVIDER`; `CLOUDINARY_URL` is a **secret**; never in `public/`, never in PostgreSQL (ADR-0012/0016) |
 | Content sources | **RSS / Atom feeds** via a purpose-built reader | SSRF-guarded fetcher; **no crawler, no XML dependency, no AI** (ADR-0026) |
-| Jobs | Deferred | In-process scheduling first; **Redis/BullMQ only when justified** (see ADR-0005) |
+| Jobs | **PostgreSQL durable jobs + Node worker** | Leased, idempotent CRM/assisted-draft/customer-dispatch work; dedicated authenticated trigger (ADR-0035). No Redis/BullMQ |
 
 **Not yet installed, and must not be added until its milestone has a concrete need:** Redis, BullMQ,
 a component library. Adding one early is a defect. (Prisma, Auth.js, a Monday API client and the
@@ -83,6 +83,9 @@ Resend SDK are now installed and in use — the last selected in ADR-0025.)
 │       └── NNNN-*.md         # Individual ADRs
 ├── public/                   # Static assets
 ├── electron/                 # Optional Windows wrapper + runtime config/build helpers (ADR-0033)
+├── ops/                      # Portable hosted runtime, backup/restore and isolated container drill (ADR-0034)
+├── Dockerfile                # Non-root app, explicit migrator, PostgreSQL backup tool targets
+├── .github/workflows/ci.yml  # Synthetic tests, browser checks, images and recovery rehearsal
 ├── src/
 │   ├── app/                  # Next.js App Router (routes, layouts, route handlers)
 │   ├── domain/               # Pure domain logic: types, enums, invariants, state machines (NO I/O)
@@ -135,7 +138,82 @@ Directories under `src/` beyond `app/` are created as their milestone arrives; e
 - `npm run desktop:smoke` uses only the guarded test database and synthetic account,
   disables every live email/CRM adapter, proves packaged login, and shuts down cleanly.
 
+### Hosted operations and scaling (ADR-0034)
+
+- `ops/start.mjs` validates external configuration before startup and sets `AXIS_HOSTED=true`.
+  Delivery defaults off. A coherent external operator release may enable customer delivery under
+  ADR-0035; pilot and QA switches remain false. No browser can change environment gates.
+  Hosted media requires Cloudinary. HTTP/local-media exceptions are limited to loopback test
+  origins, a database ending `_test`, and no live adapter credentials.
+- Hosted sign-in uses `AuthRateLimit`: atomic PostgreSQL counters, eight attempts per 60 seconds,
+  opaque HMAC identity keys, bounded expired-row cleanup. Database/configuration failures refuse
+  login and never fall back to a process-local limiter. Local development/Electron keep their map.
+- Replicas use the exact same image, origin, Auth.js secret and shared database/media. Budget
+  `replicas * (DB_POOL_MAX + 1)` connections plus migration/admin headroom. Redis/BullMQ remain deferred;
+  the durable queue uses PostgreSQL (ADR-0035). Vitest uses at most four workers for the same reason.
+- `/api/health/live` and `/api/health/ready` are exact public paths returning status only. Readiness
+  uses a bounded database pool and the committed migration checksum manifest, with no provider calls.
+  Run `npm run ops:manifest` after adding migrations. Historical LF/CRLF checksums are recognized.
+- Migrations run once as an explicit release step with a separate credential, never at app startup.
+  CI and the container drill use only synthetic, isolated databases and no operational secrets.
+- `npm run dev` regenerates Prisma before starting Next.js; schema changes also require restarting
+  any existing dev server. Regeneration never applies migrations. Disabled scheduler readiness
+  performs no heartbeat query; outdated clients, missing schema and unavailable scheduler storage
+  block customer release with an actionable message, never an undefined-delegate TypeError.
+- The shared Prisma singleton reuses only clients stamped for the generated model/field shape,
+  migration manifest, validated database target and pool settings. Legacy or incomplete cached
+  clients are replaced and their pools drained; incomplete newly generated clients fail explicitly.
+  Validate the test database target before any cache reuse. Health readiness checks both generated
+  client compatibility and applied migrations; database connectivity alone cannot prove readiness.
+- Backups stream into authenticated encryption. Restore requires a separate empty database ending
+  `_restore` plus exact confirmation; it never overwrites operational or test databases. No real
+  recovered CRM data may enter automated test fixtures. Restore tooling is infrastructure-only.
+- Host selection, TLS, offsite copies, scheduled backups, alerts and recovery objectives must be
+  provisioned explicitly. Checked-in templates do not mean these services are running. Follow
+  `docs/operations.md`; keep all secrets and archives outside the checkout.
+
 ## Architecture Rules
+
+### Completed workflows (ADR-0035)
+
+- `BackgroundJob` is unique per occurrence. Claims are atomic, leased and renewed. The worker
+  sends a dedicated bearer token to the exact `/api/internal/jobs/tick` endpoint; that route takes
+  no actor, recipient, job id or schedule input. The async job context proves an unexpired lease,
+  active persisted staff delegation and a capability allowlist. A job can never approve a message.
+- CRM schedules are explicit staff actions. Monday event intake requires the app Signing Secret,
+  exact endpoint audience, account id and short-lived HS256 claims; generic unsigned subscriptions
+  are refused. Only a no-write URL challenge is unsigned. Events retain identity metadata only and
+  coalesce into future CRM reconciliations through the existing read-only port.
+- Assisted occurrences prepare DRAFTs only. Draft creation and the run's generated-campaign pointer
+  commit atomically. Interrupted automation requires attention and is never blindly recreated.
+- Actual customer dispatch is implemented through the production port's separate `sendCustomer`.
+  The existing `send` method remains the single-address provider-pilot path. Default delivery stays
+  locked. Release requires production process, environment delivery/mode/release gates, Resend,
+  fresh verified SPF/DKIM, explicit domain-review attestation, public unsubscribe, signed provider
+  webhook configuration, and an enabled scheduler with a recent heartbeat. DMARC stays UNKNOWN in
+  the provider read model; operator review is not provider verification.
+- A human confirms `SEND N CUSTOMERS` and a time after the current audience and exact production
+  message are approved by another active person. UNKNOWN consent stays a planning warning and
+  cannot authorize actual delivery: every intended destination must be GRANTED at scheduling.
+- Scheduling freezes the entire canonical document and audits lifecycle transitions. All draft
+  mutations must serialize or compare-and-set against DRAFT. Canceling an unstarted scheduled
+  delivery creates terminal CANCELED history. A start over five minutes late requires rescheduling.
+- Each submission reuses the canonical resolver with an indexed address scope, re-reads segment/CRM
+  and high-authority vetoes, and can only remove approved ledger destinations. An attempt is claimed
+  before I/O. No attempted row is automatically retried, including FAILED and UNCERTAIN. A shared
+  provider slot permits at most one customer submission per 550 ms. Resend's 24-hour idempotency
+  retention is extra protection, never the foundation of indefinite retry safety.
+- Verified provider receipts survive arrival before a send response. Correlation requires exact
+  provider-message-id and normalized address; no email-only guess. Suppression/opt-out effects are
+  immediate and applied once. ACCEPTED, DELIVERED, OPENED and CLICKED are distinct. Historical
+  acceptance bucket errors must not be counted as delivered without the recipient delivery timestamp.
+- Reports expose UTC campaign-creation cohorts, 20-campaign/100-recipient pages, first engagement,
+  activity history, attribution limits and authenticated audited CSV exports capped at 20,000 rows.
+  Formula-capable CSV values are escaped. Job lists expose no lease or bearer secret.
+- `npm run ops:benchmark` owns disposable synthetic containers and cannot target an arbitrary host.
+  Local HTTP latency does not establish a hosted SLA, browser rendering speed or provider throughput.
+  External subscriptions, secrets, HTTPS hosting and customer release require operator provisioning;
+  checked-in implementation is never evidence that those services are enabled.
 
 1. **Layer separation is enforced by import direction:**
    `ui` / `app` → `server/services` → `domain` + `server/db` + `server/integrations`.
@@ -179,8 +257,8 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 - Allowed transitions are defined **once** as a state machine in `domain/`. All transition attempts
   go through it; illegal transitions throw. Never mutate `status` directly in a service or route.
 - **Only a `MANAGER` (or `ADMIN`) may `approve` or `reject`.** A user **cannot approve a campaign
-  they created** unless they are `ADMIN` (four-eyes principle; validate `createdById !== approverId`
-  for managers). Rejection **requires a reason**.
+  they created**, including ADMIN (four-eyes principle; validate `createdById !== approverId`
+  for every role). Rejection **requires a reason**.
 - A campaign is **editable only in `DRAFT`**. Submitting locks content; `REJECTED → DRAFT` unlocks.
 - Sending is only permitted from `SCHEDULED` (or `APPROVED` for an immediate send) and moves through
   `SENDING → SENT`. `SENT`, `FAILED`, and `CANCELED` are terminal.
@@ -210,11 +288,10 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
   again creates a NEW snapshot, and the newest is the current one. A destination is **not** a
   `CampaignRecipient`: that table means delivery happened or will, and writing to it early would
   make "was this sent?" unanswerable.
-- **Production customer sending is NOT implemented.** The readiness checklist's infrastructure check
-  is hard-wired `BLOCKED`, there is no send action or route handler for it, and the only
-  `ProductionEmailProvider` implementation **throws** when asked to send — never a quiet no-op that
-  could be mistaken for a delivery. `PRODUCTION_DELIVERY_ENABLED` lives in the environment, not the
-  database, so no UI writes it and no role — including ADMIN — can flip it from a browser.
+- **Production customer sending is implemented and disabled by default (ADR-0035).** Readiness
+  reports all server release checks. A separate typed scheduling action creates authorized work;
+  the disabled provider still throws. `PRODUCTION_DELIVERY_ENABLED` lives in the environment, not
+  the database, so no UI writes it and no role — including ADMIN — can flip it from a browser.
 - **A delivery ledger is preparation, not delivery (ADR-0024).** `CampaignRecipient.finalAudienceId`
   is **required**: a destination with no approved provenance is one nobody authorized. Rows are
   created `PENDING` by an explicit dry-run action that demands a signed-in actor, a NON-STALE final
@@ -291,6 +368,15 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 - **Client-supplied HTML is never stored or emitted.** Authors write a restricted markup; the server
   escapes it and emits only tags it generates itself, so XSS-safety is structural, not sanitizer-based.
   Link schemes are limited to `http`/`https`/`mailto`.
+- **Mixed-format input (ADR-0036):** plain text, restricted Markdown, formatted clipboard content
+  and HTML fragments are converted to our editable markup before storage/rendering. Pinned `parse5`
+  is a pure HTML parser dependency in `domain/content/articleFormat.ts`; no DOM execution or I/O.
+  No publisher CSS or raw HTML passes through. Images, quotes, headings, lists and links adapt;
+  tables become readable rows. `.txt`, `.md`, `.markdown`, `.html`, `.htm` imports are capped at
+  200 KB, raw server input at 200,000 characters and normalized body at 50,000 characters.
+  No binary document import, crawler or automatic asset download is added.
+  Legacy excerpts are normalized for display without rewriting source data. AXIS editorial copy
+  takes precedence in live newsletter composition; frozen dispatch documents/snapshots still win.
 - **Images:** type allow-list + magic-byte sniffing + size cap; **SVG rejected**; the client filename
   never reaches disk (a storage name is generated); files live outside `public/` and are served by a
   handler that pins the content type and sends `nosniff`. Access goes through the **`MediaStore` port**.
@@ -462,6 +548,9 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 - **Only a title, a short source-supplied excerpt and a link are stored** — never the article.
   Atom `<summary>` is preferred over `<content>` (often the whole piece), excerpts are truncated at
   ingestion, and the newsletter links to the original.
+- Excerpts are decoded and normalized before truncation (ADR-0036), including encoded HTML,
+  CDATA, Atom XHTML and RSS `content:encoded` fallback. Public image references are retained
+  from enclosure/media elements or embedded excerpt pictures; downloading remains an explicit action.
 - **Adding a SOURCE is ADMIN** (`MANAGE_CONTENT_SOURCES`) because a source is a URL this server
   will fetch. Reviewing ARTICLES is ordinary MANAGER work. This amends ADR-0023's "exactly one
   admin capability" note; the invariant it protected is now tested directly — **nothing an
@@ -482,8 +571,24 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
 - **External images are imported only on explicit request**, with the same guards as an upload
   (public URL, size cap, magic-byte sniffing, SVG refused). Hot-linking breaks when a publisher
   reorganises their CDN; importing everything automatically would be rude and expensive.
-- **No AI.** Subject/preheader suggestions are mechanical string operations. Adding a generator
-  needs its own ADR, and its output would be DRAFT text requiring human review.
+- **Reviewed Hebrew translation (ADR-0037)** is an explicit staff action through a separate
+  server-only OpenAI translation port, off without configuration and unavailable to live adapters
+  under tests. It creates a separate HE article in PENDING_REVIEW, preserves source text and
+  provenance, and never approves, selects an audience, attaches a campaign or sends. Translation
+  attempts are persisted, deduplicated, quota-limited and audited; stale/partial results are refused.
+  Model output is validated, protected links/numbers/identifiers stay intact, and only article text
+  goes to the provider. CRM, internal notes, staff identities and secrets are excluded.
+  Subject/preheader suggestions remain mechanical; automatic AI summarization stays deferred.
+- **Regular ChatGPT translation (ADR-0038)** is a manual copy/paste option, available without
+  API configuration. Preparing a prompt makes no write or external provider call; its signed receipt is
+  actor/article/source-bound and expires after 24 hours. Import validates current source and
+  protected passages, then atomically creates a separate HE/PENDING_REVIEW draft and audit.
+  It records `CHATGPT_MANUAL_UNVERIFIED`, never an authenticated provider/model claim. Repeated
+  imports reuse the completed version; manual imports do not consume API request quotas.
+  No ChatGPT cookies, browser automation, API-key workaround or automatic sending is added.
+  Translation screens distinguish a missing article body from saved text, expose a readable
+  source preview and mark excerpt-only actions explicitly. A saved body is not proof of a
+  complete publisher article; apparent truncation warns. Source changes clear prepared prompts.
 - **No live provider can be constructed under the test runner.** A developer machine holds real
   credentials in `.env.local` and the suite reads the same environment, so BOTH registries refuse
   a network-capable adapter under `VITEST`/`NODE_ENV=test`; the SAFE TEST port resolves to a
@@ -985,9 +1090,8 @@ A contact is **email-eligible** only if **all** hold, re-checked at send time:
   production delivery — each READY or NOT READY. A dry-run ledger control is labelled
   **"Prepare delivery records — NO EMAIL WILL BE SENT"** and rows read **PREPARED / NOT SENT**.
 - **Send readiness (`/newsletters/[id]/readiness`)** shows every check as READY / WARNING / BLOCKED,
-  the full audience funnel, the exclusion breakdown, and inspectable lists of eligible addresses and
-  exclusions. The production control is rendered **disabled** with the reason
-  *"Production customer sending has not been enabled."*
+  the full audience funnel, exclusions, exact customer-message preview and typed delivery controls.
+  Production controls stay disabled until both server release and campaign checks are satisfied.
 
 ### QA rendering review (ADR-0030)
 

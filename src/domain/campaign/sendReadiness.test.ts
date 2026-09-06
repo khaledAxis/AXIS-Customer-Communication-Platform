@@ -60,13 +60,13 @@ describe("send readiness", () => {
     expect(preparationComplete(result)).toBe(true);
   });
 
-  it("cannot be talked into enabling production", () => {
+  it("reflects a server-verified infrastructure release while preserving other readiness checks", () => {
     const result = evaluateSendReadiness({
       ...input(),
       production: { enabled: true },
     });
-    expect(status(result, "production")).toBe("BLOCKED");
-    expect(result.ready).toBe(false);
+    expect(status(result, "production")).toBe("READY");
+    expect(result.ready).toBe(true);
   });
 
   it("blocks with no audience selected", () => {

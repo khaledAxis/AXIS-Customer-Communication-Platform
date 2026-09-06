@@ -53,6 +53,9 @@ export function ContentForm({
   const [state, formAction, pending] = useActionState(action, { ok: false, errors: [] });
   const [language, setLanguage] = useState(values.language ?? "HE");
   const [origin, setOrigin] = useState(values.origin ?? "INTERNAL");
+  const [sourceUrl, setSourceUrl] = useState(values.externalUrl ?? "");
+  const [title, setTitle] = useState(values.title ?? "");
+  const [summary, setSummary] = useState(values.summary ?? "");
 
   const errorFor = (field: string) => state.errors.find((e) => e.field === field)?.message;
 
@@ -108,7 +111,8 @@ export function ContentForm({
             <input
               type="text"
               name="title"
-              defaultValue={values.title ?? ""}
+              value={title}
+              onChange={event => setTitle(event.target.value)}
               required
               maxLength={200}
               dir={language === "HE" || language === "AR" ? "rtl" : "ltr"}
@@ -124,7 +128,8 @@ export function ContentForm({
           >
             <textarea
               name="summary"
-              defaultValue={values.summary ?? ""}
+              value={summary}
+              onChange={event => setSummary(event.target.value)}
               rows={3}
               maxLength={500}
               dir={language === "HE" || language === "AR" ? "rtl" : "ltr"}
@@ -134,15 +139,18 @@ export function ContentForm({
         </div>
       </Card>
 
+      <section id="article-text" aria-label="Add or edit article text" className="scroll-mt-24">
       <Card className="p-6">
         <Field
           label="Article text"
-          hint="Select some text and use the buttons to add headings, bold, links or lists."
+          hint="Paste formatted content, HTML or plain text. You can combine formats in the same article."
           error={errorFor("body")}
         >
-          <RichTextEditor name="body" defaultValue={values.body ?? ""} language={language} />
+          <RichTextEditor name="body" defaultValue={values.body ?? ""} language={language} baseUrl={sourceUrl} title={title} summary={summary} />
         </Field>
+        {origin === "INGESTED" && <p className="mt-3 text-sm leading-relaxed text-sky-800">For a full Hebrew translation, add the complete source text here. A website link alone is not enough. Save changes, then prepare a fresh translation prompt.</p>}
       </Card>
+      </section>
 
       <Card className="p-6">
         <Field label="Picture" hint="Shown at the top of this article inside the newsletter.">
@@ -151,6 +159,7 @@ export function ContentForm({
             altName="imageAlt"
             defaultUrl={values.imageUrl}
             defaultAlt={values.imageAlt}
+            language={language}
           />
         </Field>
       </Card>
@@ -219,7 +228,8 @@ export function ContentForm({
               <input
                 type="url"
                 name="externalUrl"
-                defaultValue={values.externalUrl ?? ""}
+                value={sourceUrl}
+                onChange={(event) => setSourceUrl(event.target.value)}
                 placeholder="https://example.com/article"
                 dir="ltr"
                 className={inputClass}

@@ -1,0 +1,6 @@
+# Migration content and image build context must be identical across operating systems.
+prisma/migrations/**/*.sql text eol=lf
+ops/*.mjs text eol=lf
+Dockerfile text eol=lf
+.github/workflows/*.yml text eol=lf
+

@@ -61,7 +61,7 @@ export async function setCampaignSegment(
   }
 
   await prisma.campaign.update({
-    where: { id: campaignId },
+    where: { id: campaignId, status: "DRAFT" },
     data: { segmentId },
   });
 }

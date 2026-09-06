@@ -7,6 +7,7 @@ import type { LoginFormState } from "../app/login/actions";
 import type { SetupFormState } from "../app/setup/actions";
 import { MIN_PASSWORD_LENGTH, passwordStrength } from "../domain/auth/passwordPolicy";
 import { buttonPrimary, inputClass } from "./primitives";
+import { AxisMark } from "./Icon";
 
 /**
  * The two anonymous screens: signing in, and creating the very first administrator.
@@ -26,33 +27,14 @@ function AuthCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="mx-auto w-full max-w-md">
-      <div className="mb-8 flex items-center gap-3">
-        <span
-          aria-hidden
-          className="grid h-11 w-11 place-items-center rounded-xl bg-slate-900 text-base font-black text-white"
-        >
-          AX
-        </span>
-        <div>
-          <p className="text-lg font-bold tracking-tight text-slate-900">
-            AXIS Communication
-          </p>
-          <p className="text-xs text-slate-500">
-            AXIS GPS &amp; Mapping Solutions — internal tool
-          </p>
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-xl font-bold text-slate-900">{title}</h1>
-        <p className="mt-1 text-sm text-slate-600">{subtitle}</p>
-        <div className="mt-5">{children}</div>
-      </div>
+    <div className="auth-card">
+      <div className="auth-brand"><AxisMark /><div><strong>AXIS Communication</strong><small>Your team. Your expertise. Connected.</small></div></div>
+      <h1>{title}</h1>
+      <p>{subtitle}</p>
+      <div className="mt-7">{children}</div>
     </div>
   );
 }
-
 function Problem({ message }: { message: string }) {
   if (!message) return null;
   return (

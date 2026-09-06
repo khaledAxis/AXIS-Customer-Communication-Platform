@@ -198,6 +198,9 @@ d("production delivery ledger", () => {
   });
 
   afterAll(async () => {
+    for (const email of ALL) await prisma.providerWebhookReceipt.deleteMany({
+      where: { normalizedEvent: { path: ["normalizedEmail"], equals: email } },
+    });
     if (!HAS_DB) return;
     clearTestActor();
     await prisma.campaignEvent.deleteMany({
@@ -802,8 +805,8 @@ d("production delivery ledger", () => {
     expect(routes).toContain("/api/webhooks");
     expect(routes).not.toContain("/api/provider");
 
-    const route = readFileSync("src/app/api/webhooks/resend/route.ts", "utf8");
-    const verifyAt = route.indexOf("provider.verifyWebhook(");
+    const route = readFileSync("src/server/services/providerWebhookService.ts", "utf8");
+    const verifyAt = route.indexOf(".verifyWebhook(");
     const ingestAt = route.indexOf("ingestProviderEvent(");
     expect(verifyAt).toBeGreaterThan(-1);
     // Verification must come first in the file, and the rejection must return before

@@ -7,6 +7,7 @@ import * as ledger from "../../src/server/db/repositories/qaLedgerRepository";
 import { setQaFixtureOwnerForTesting } from "../../src/server/db/repositories/qaLedgerRepository";
 import * as review from "../../src/server/services/qaReviewService";
 import { actAs, actAsNobody, clearTestActor, createTestUser, type TestUser } from "../support/actor";
+import { acquireQaQuotaTestLock } from "../support/qaQuotaLock";
 
 /**
  * Manual rendering review (ADR-0030).
@@ -27,6 +28,7 @@ const OWNER = `qa-review-${randomUUID().slice(0, 12)}`;
 d("QA rendering review", () => {
   let prisma: ReturnType<typeof getPrisma>;
   let reviewer: TestUser;
+  let releaseQuotaLock: (() => Promise<void>) | undefined;
   const syntheticRunIds: string[] = [];
 
   /**
@@ -59,6 +61,7 @@ d("QA rendering review", () => {
   };
 
   beforeAll(async () => {
+    releaseQuotaLock = await acquireQaQuotaTestLock();
     reviewer = await createTestUser({ prefix: "qarev", role: "MANAGER" });
     prisma = getPrisma();
     await prisma.$connect();
@@ -80,7 +83,7 @@ d("QA rendering review", () => {
       await prisma.qaEmailRun.deleteMany({ where: { id: { in: syntheticRunIds } } });
       await prisma.user.deleteMany({ where: { id: reviewer.id } });
     } finally {
-      await prisma.$disconnect();
+      try { await prisma?.$disconnect(); } finally { await releaseQuotaLock?.(); }
     }
   });
 

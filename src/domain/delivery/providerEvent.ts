@@ -23,6 +23,8 @@ export const ProviderEventType = {
    */
   ACCEPTED: "ACCEPTED",
   DELIVERED: "DELIVERED",
+  OPENED: "OPENED",
+  CLICKED: "CLICKED",
   HARD_BOUNCE: "HARD_BOUNCE",
   SOFT_BOUNCE: "SOFT_BOUNCE",
   COMPLAINT: "COMPLAINT",
@@ -78,6 +80,9 @@ export interface EventConsequence {
  */
 export function consequenceOf(type: ProviderEventType): EventConsequence {
   switch (type) {
+    case ProviderEventType.OPENED:
+    case ProviderEventType.CLICKED:
+      return { deliveryState: null, suppression: null, markEmailInvalid: false, unsubscribe: false };
     case ProviderEventType.ACCEPTED:
       // Acceptance is a real fact worth recording, and it is not delivery. The state
       // machine refuses ACCEPTED once a delivery has already been confirmed, so an

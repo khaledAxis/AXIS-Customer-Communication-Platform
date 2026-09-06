@@ -1,6 +1,6 @@
 # Requirements — AXIS Customer Communication Platform
 
-Status: **Draft for MVP foundation.** This document defines *what* the system must do. It is the
+Status: **Implemented internal workflows with default customer-delivery locks (ADR-0035).** This document defines *what* the system must do. It is the
 source of truth for scope; when scope changes, update it here and, if the change is architectural,
 add an ADR.
 
@@ -103,6 +103,10 @@ Corrected to the **real Monday CRM** (ADR-0009):
 - **[MVP]** Language is `HE | AR | UNKNOWN`; `UNKNOWN` is explicit, never silently Hebrew. Contact
   language is **mirrored from Monday** if a reliable field exists, otherwise locally managed (ADR-0007).
 - **[Future]** Per-contact language preference learning; automatic translation.
+- **Implemented (ADR-0037):** staff can explicitly prepare a Hebrew translation of an
+  external article with OpenAI. Preserve the original, technical identifiers, figures,
+  links and layout; create a separate unapproved HE article with RTL editing and rendering.
+  Review is required before newsletter selection. No translation runs during collection.
 
 ### 3.10 Campaign / Newsletter Builder
 - **[MVP]** Create a campaign: subject, language, target segment, content composition, sender.
@@ -164,6 +168,14 @@ Corrected to the **real Monday CRM** (ADR-0009):
   (§8.9, ADR-0008).
 
 ### 3.19 External Content Ingestion & Content Inbox (ADR-0010)
+
+- **Implemented (ADR-0036):** accept plain text, restricted Markdown, HTML fragments and
+  mixtures, including formatted clipboard paste and text/Markdown/HTML file imports.
+  Normalize publisher excerpts before truncation; preserve public image references.
+  Retain headings, emphasis, lists, links, quotes and inline pictures; flatten table rows
+  into readable text. Show clean existing draft excerpts without rewriting stored source
+  metadata. Keep AXIS editorial copy separate, with precedence in live newsletters.
+  This does not include PDF/DOCX parsing, video embeds, crawling or automatic sending.
 - **[MVP]** Model approved **`ContentSource`s** (INTERNAL/RSS/WEBSITE/API/MANUAL_EXTERNAL) and store
   ingested items as **PENDING_REVIEW** content; record `ContentIngestionRun` history. **Automatic
   collection ≠ automatic sending** — external content is never customer-sent without human approval.
@@ -173,7 +185,20 @@ Corrected to the **real Monday CRM** (ADR-0009):
   review status) with Preview / Approve / Ignore / Add-to-Newsletter actions.
 - **[Future]** Automated network collectors (RSS/API/website) — **not** implemented yet (no fetching).
 
-### 3.20 AI-Assisted Content Summarization
+### 3.20 Reviewed Translation and Future Summarization
+- **Implemented (ADR-0038):** staff may use their regular ChatGPT account by copying a
+  prepared prompt and importing its reply. This path requires no API configuration or
+  credits. Import binds the reply to its source, validates protected content, refuses
+  stale/partial results, and creates an unapproved Hebrew draft without provider calls.
+  The screen identifies missing article text and labels excerpt-only translation explicitly.
+  Staff can inspect included passages and add/save full text before preparing a new prompt.
+  Source URLs are not retrieved; saved-body presence is not a completeness guarantee.
+- **Implemented (ADR-0037):** explicit Hebrew article translation through a provider port,
+  disabled until an administrator configures OpenAI. Use a surveying/mapping glossary,
+  strict structured output, protected figures and formatting, source-change detection,
+  duplicate prevention, bounded time/concurrency/requests and audited attempt history.
+  No partial or failed output becomes an article; no translation approves or sends content.
+  Only article text leaves the platform. A human checks linguistic and technical accuracy.
 - **[Future]** Summarize/normalize ingested articles with an LLM (Claude), human-reviewed before use.
   Explicitly a later phase; do not build now.
 
@@ -189,6 +214,9 @@ Corrected to the **real Monday CRM** (ADR-0009):
 - **Security** — no committed secrets, server-enforced authz, validated inputs, signed webhooks.
 - **Internationalization** — full **RTL** support for Hebrew and Arabic from the start.
 - **Accessibility & responsiveness** — semantic, keyboard-navigable, responsive UI.
+- **Workspace navigation** — group pages by workflow, provide a keyboard-accessible page
+  switcher and mobile navigation, and keep the viewer identity and test-mode indicator visible.
+  Newsletter name/subject search and status filters persist in the URL and can be cleared.
 - **Scale** — small (~500–2,000 contacts, low campaign volume). Do **not** over-engineer for scale;
   choose simple designs. Revisit only with evidence.
 - **Observability** — meaningful logs for auth, approvals, sends, imports, webhook processing.
@@ -369,8 +397,32 @@ tracked explicitly per content item and campaign.
 
 ## 10. Scale Assumptions
 
+- **Completed workflows (ADR-0035):** durable scheduled CRM reconciliation and assisted draft
+  preparation; authenticated Monday event intake with periodic repair; separately gated customer
+  dispatch; verified event reconciliation and real delivery/engagement reports. A distinct human
+  approval and typed audience-count/time confirmation are required. Unknown consent is a planning
+  warning and never enough to authorize actual delivery. Every attempted destination is protected
+  from automatic resubmission. Scheduled message content is immutable.
+- **Measured scope:** the synthetic container benchmark covers 500/2,000/10,000 contacts and an
+  equal number of companies, including audience readiness under concurrent reads. See
+  [capacity.md](capacity.md). These measurements are not an external-host SLA.
+- **Operational UX:** staff can inspect heartbeat, schedules, recent work and recovery actions in
+  Operations. Reports support UTC creation-date cohorts, recipient/status drilldown, unique event
+  observations, daily history and authenticated CSV export; missing tracking is never invented.
+
 - ~500–2,000 contacts initially; low concurrent users (admin + a few managers); modest campaign
   frequency. Designs should favor simplicity; premature scaling infrastructure is out of scope.
+- **Hosted baseline (ADR-0034):** support identical application replicas with shared PostgreSQL login
+  throttling and Cloudinary media. Bound connection pools/timeouts and require external secrets,
+  HTTPS, explicit migration deployment and database-aware readiness. Do not add a queue or cache
+  without a concrete need. ADR-0035 uses the existing database for durable work; customer delivery
+  stays disabled by default and requires an explicit external operator release.
+- **Operational verification:** CI uses synthetic data and no live provider credentials. A container
+  rehearsal must verify shared sessions/throttling, database interruption/recovery and encrypted
+  backup restoration into a separate empty database. The tool must refuse an occupied restore target.
+- **Recovery/monitoring ownership:** the host must supply backup scheduling, offsite retention, alerts
+  and an agreed recovery point/time objective. Checked-in tools do not establish these services or
+  prove a throughput target. See [operations.md](operations.md).
 
 ## 11. Open Questions (need business/technical validation)
 

@@ -92,6 +92,9 @@ d("provider webhook endpoint", () => {
   afterAll(async () => {
     setProductionEmailProviderForTesting(undefined);
     try {
+      for (const email of touched) await prisma.providerWebhookReceipt.deleteMany({
+        where: { normalizedEvent: { path: ["normalizedEmail"], equals: email } },
+      });
       await prisma.suppressionEvent.deleteMany({
         where: { normalizedEmail: { in: touched } },
       });
@@ -251,7 +254,7 @@ d("provider webhook endpoint", () => {
       // Comments name `request.json()` to explain why it is not used.
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/\/\/[^\n]*/g, "");
-    expect(source).toMatch(/request\.text\(\)/);
+    expect(source).toMatch(/readBoundedText\(request\)/);
     expect(source).not.toMatch(/request\.json\(\)/);
   });
 });

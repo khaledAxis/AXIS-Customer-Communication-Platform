@@ -67,6 +67,11 @@ default awaiting confirmation from stakeholders.
 | [0031](0031-authenticated-browser-e2e.md) | Authenticated browser E2E (Playwright) against a production build and the test database | Accepted |
 | [0032](0032-premium-newsletter-and-public-web-version.md) | Premium newsletter proportions & a per-newsletter public web version behind an opaque token | Accepted — **no sending change**; unsubscribe prominence unchanged |
 | [0033](0033-windows-desktop-wrapper.md) | Windows Electron wrapper around the self-hosted Next.js application | Accepted — **no client-side authority and no delivery activation** |
+| [0034](0034-hosted-operations-foundation.md) | Portable hosting, shared login protection, health, CI and encrypted recovery | Accepted — **customer delivery remains locked** |
+| [0035](0035-durable-workflows-customer-dispatch-and-reporting.md) | Durable scheduled work, signed Monday intake, guarded customer dispatch, complete reporting and measured capacity | Accepted — **implementation complete; customer release remains off by default** |
+| [0036](0036-mixed-format-article-adaptation.md) | Mixed-format article input, normalized publisher excerpts and adaptive email-safe content | Accepted — **no automatic approval, asset download or sending** |
+| [0037](0037-reviewed-hebrew-article-translation.md) | OpenAI translation into a separate Hebrew draft with source comparison, RTL and bounded audited requests | Accepted — **human review required; disabled without configuration** |
+| [0038](0038-chatgpt-copy-paste-translation.md) | Regular ChatGPT through protected prompt copying and validated Hebrew draft import | Accepted — **no API credits or provider calls; manual review required** |
 
 ---
 

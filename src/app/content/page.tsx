@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { Icon } from "../../ui/Icon";
+import { BidiText } from "../../ui/BidiText";
 
 import { listContent } from "../../server/services/contentService";
 import type { ContentFilter } from "../../server/db/repositories/contentRepository";
@@ -65,7 +67,7 @@ export default async function ContentPage({
         </div>
       ) : null}
 
-      <nav aria-label="Filter articles" className="mb-6 flex flex-wrap gap-2">
+      <nav aria-label="Filter articles" className="library-filterbar">
         {FILTERS.map((filter) => {
           const isActive = filter.value === active;
           return (
@@ -108,14 +110,14 @@ export default async function ContentPage({
                   <img
                     src={item.imageUrl}
                     alt={item.imageAlt ?? ""}
-                    className="h-40 w-full border-b border-slate-200 object-cover"
+                    loading="lazy" className="h-[180px] w-full border-b border-slate-200 object-cover"
                   />
                 ) : (
                   <div
                     aria-hidden
-                    className="grid h-40 w-full place-items-center border-b border-slate-100 bg-slate-50 text-3xl text-slate-300"
+                    className="content-placeholder"
                   >
-                    🖼️
+                    <Icon name="image" size={35} />
                   </div>
                 )}
 
@@ -131,7 +133,7 @@ export default async function ContentPage({
                     dir={rtl ? "rtl" : "ltr"}
                     className="text-base font-bold leading-snug text-slate-900"
                   >
-                    {item.title}
+                    <BidiText text={item.title} dir={rtl ? "rtl" : "ltr"} />
                   </h2>
 
                   {item.summary ? (
@@ -139,7 +141,7 @@ export default async function ContentPage({
                       dir={rtl ? "rtl" : "ltr"}
                       className="mt-2 line-clamp-3 text-sm text-slate-600"
                     >
-                      {item.summary}
+                      <BidiText text={item.summary} dir={rtl ? "rtl" : "ltr"} />
                     </p>
                   ) : null}
 

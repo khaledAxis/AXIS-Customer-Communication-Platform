@@ -1,5 +1,8 @@
-import { PrismaClient } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { databasePoolSettings } from "../../domain/infra/poolSettings";
+import migrations from "./migration-manifest.json";
 
 import {
   assertTestDatabaseTarget,
@@ -30,11 +33,57 @@ import {
  * It FAILS CLOSED. A missing `TEST_DATABASE_URL` does not fall back to `DATABASE_URL`;
  * it throws, and the message says why.
  */
-let client: PrismaClient | undefined;
+interface ClientCacheEntry {
+  client: PrismaClient;
+  identity: string;
+}
+
+let cache: ClientCacheEntry | undefined;
 
 const globalForPrisma = globalThis as unknown as {
+  __axisPrismaCache?: ClientCacheEntry;
+  /** Previous releases cached an unversioned client here. Never reuse it. */
   __axisPrisma?: PrismaClient;
 };
+
+// The generated model/field shape changes even when the Prisma package version does
+// not. A migration-manifest change also invalidates a client retained through HMR.
+const modelFingerprint = createHash("sha256").update(JSON.stringify({
+  version: Prisma.prismaVersion.client, datamodel: Prisma.dmmf.datamodel, migrations,
+})).digest("hex");
+const delegateNames = Object.values(Prisma.ModelName).map(name => name[0].toLowerCase() + name.slice(1));
+const workflowFields = {
+  Campaign: ["dispatchDocument", "dispatchApprovalId", "deliveryConfirmedCount"],
+  AuthRateLimit: ["key"], BackgroundJob: ["leaseToken"], JobSchedule: ["nextRunAt"],
+  SchedulerHeartbeat: ["lastTickAt"], ProviderRateLimit: ["nextAvailableAt"],
+  ProviderWebhookReceipt: ["normalizedEvent", "processedAt"],
+  ContentTranslation: ["sourceHash", "generatedContentItemId", "state"],
+} as const;
+
+/** Check the generated module too: a fresh instance of old generated code is still old. */
+const generatedWorkflowModelsPresent = Object.entries(workflowFields).every(([name, fields]) => {
+  const model = Prisma.dmmf.datamodel.models.find(item => item.name === name);
+  return model && fields.every(field => model.fields.some(item => item.name === field));
+});
+
+export class StalePrismaClientError extends Error {
+  constructor() {
+    super("The server database client is outdated. Stop Next.js, run npm run db:generate, clear the .next/dev cache, and restart with npm run dev. Database migrations remain a separate release step.");
+    this.name = "StalePrismaClientError";
+  }
+}
+
+function hasCurrentDelegates(candidate: PrismaClient): boolean {
+  // A runtime compatibility check intentionally does not trust the compile-time type.
+  const delegates = candidate as unknown as Record<string, { count?: unknown; findUnique?: unknown } | undefined>;
+  return delegateNames.every(name => typeof delegates[name]?.count === "function" && typeof delegates[name]?.findUnique === "function");
+}
+
+function retireClient(candidate: PrismaClient) {
+  // Drain superseded adapters without leaking a new pool on every hot reload. Never
+  // serialize a disconnect error: adapter diagnostics can include connection details.
+  void candidate.$disconnect().catch(() => undefined);
+}
 
 export function inTestRunner(): boolean {
   return process.env.NODE_ENV === "test" || process.env.VITEST !== undefined;
@@ -79,18 +128,28 @@ export function resolveDatabaseUrl(): string {
 }
 
 export function getPrisma(): PrismaClient {
-  if (globalForPrisma.__axisPrisma) return globalForPrisma.__axisPrisma;
-  if (client) return client;
-
+  // Validate the target BEFORE consulting any cache, including inside a test runner.
   const connectionString = resolveDatabaseUrl();
+  if (!generatedWorkflowModelsPresent) throw new StalePrismaClientError();
+  const settings = databasePoolSettings(process.env);
+  // Only the opaque digest is retained with the cache, never a second raw URL.
+  const identity = createHash("sha256").update(JSON.stringify({ modelFingerprint, connectionString, settings })).digest("hex");
+  const shared = process.env.NODE_ENV !== "production";
+  const existing = shared ? globalForPrisma.__axisPrismaCache ?? cache : cache;
+  if (existing?.identity === identity && hasCurrentDelegates(existing.client)) return existing.client;
 
-  const adapter = new PrismaPg({ connectionString });
-  client = new PrismaClient({ adapter });
-
-  if (process.env.NODE_ENV !== "production") {
-    globalForPrisma.__axisPrisma = client;
+  const adapter = new PrismaPg({ connectionString, ...settings });
+  const fresh = new PrismaClient({ adapter });
+  if (!hasCurrentDelegates(fresh)) {
+    retireClient(fresh);
+    throw new StalePrismaClientError();
   }
-  return client;
+  const retired = new Set([existing?.client, cache?.client, globalForPrisma.__axisPrisma]);
+  cache = { client: fresh, identity };
+  if (shared) globalForPrisma.__axisPrismaCache = cache;
+  delete globalForPrisma.__axisPrisma;
+  for (const previous of retired) if (previous && previous !== fresh) retireClient(previous);
+  return fresh;
 }
 
 /** Safe, credential-free description of the active target, for diagnostics. */

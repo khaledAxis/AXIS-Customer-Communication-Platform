@@ -20,6 +20,7 @@ import {
 } from "../../../domain/delivery/providerEvent";
 import { assertValidReplyTo } from "../../../domain/send/replyTo";
 import { hasHeaderInjection } from "../../../domain/send/testSendPolicy";
+import { assertCustomerEnvelope } from "../../../domain/delivery/customerEnvelope";
 import type { ProviderSendResult } from "./emailProvider";
 import type {
   ProductionEmailMessage,
@@ -181,6 +182,19 @@ export class ResendProductionEmailProvider implements ProductionEmailProvider {
   }
 
   async send(message: ProductionEmailMessage): Promise<ProviderSendResult> {
+    assertSafePilotEnvelope(message);
+    return this.submit(message);
+  }
+
+  async sendCustomer(message: ProductionEmailMessage): Promise<ProviderSendResult> {
+    if (process.env.NODE_ENV !== "production" || process.env.PRODUCTION_DELIVERY_ENABLED !== "true" || process.env.SEND_MODE !== "PRODUCTION" ||
+        process.env.AXIS_DELIVERY_RELEASE_APPROVED !== "true")
+      throw new Error("Production customer delivery is locked.");
+    assertCustomerEnvelope(message);
+    return this.submit(message);
+  }
+
+  private async submit(message: ProductionEmailMessage): Promise<ProviderSendResult> {
     const key = apiKey();
     if (!key || !apiKeyLooksReal(key)) {
       throw new Error(
@@ -191,7 +205,7 @@ export class ResendProductionEmailProvider implements ProductionEmailProvider {
     // THE LAST GATE. The service has already checked the recipient; this checks again,
     // here, because the next line is a network call and a mistake past this point is a
     // real email in a real inbox. Refuses CC/BCC/arrays/multiple addresses outright.
-    const to = assertSafePilotEnvelope({ to: message.to });
+    const to = message.to;
 
     if (hasHeaderInjection(message.subject)) {
       throw new Error("That subject contains characters that are not allowed.");
@@ -353,6 +367,10 @@ export function normalizeResendEvent(
         return ProviderEventType.ACCEPTED;
       case "email.delivered":
         return ProviderEventType.DELIVERED;
+      case "email.opened":
+        return ProviderEventType.OPENED;
+      case "email.clicked":
+        return ProviderEventType.CLICKED;
       case "email.bounced":
         // Resend reports the class on the payload. Only a PERMANENT bounce is a hard
         // one; treating a transient bounce as permanent would block a working mailbox.
@@ -380,8 +398,8 @@ export function normalizeResendEvent(
   const emailId =
     typeof event.data?.email_id === "string" ? event.data.email_id : null;
 
-  const occurredAt =
-    typeof event.created_at === "string" ? new Date(event.created_at) : new Date();
+  const occurredAt = typeof event.created_at === "string" ? new Date(event.created_at) : null;
+  if (!occurredAt || !Number.isFinite(occurredAt.getTime())) return null;
 
   return {
     // Prefer the delivery's own id from the Standard Webhooks envelope, which is
@@ -394,7 +412,7 @@ export function normalizeResendEvent(
     type,
     normalizedEmail: first.trim().toLowerCase(),
     providerMessageId: emailId,
-    occurredAt: Number.isNaN(occurredAt.getTime()) ? new Date() : occurredAt,
+    occurredAt,
     reason: sanitizedBounceReason(event.data?.bounce),
   };
 }

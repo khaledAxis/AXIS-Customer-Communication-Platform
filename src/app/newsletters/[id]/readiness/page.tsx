@@ -1,5 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { CustomerDeliveryControls } from "../../../../ui/CustomerDeliveryControls";
+import { EmailPreview } from "../../../../ui/EmailPreview";
+import { getCustomerReleaseStatus } from "../../../../server/services/productionDispatchService";
+import { getNewsletter } from "../../../../server/services/newsletterService";
+import { renderProduction } from "../../../../server/services/sendReadinessService";
 
 import {
   READINESS_GROUP_LABEL,
@@ -49,9 +54,8 @@ import { Capability, requirePageCapability } from "../../../../server/auth/sessi
  * the audience still current, has this exact newsletter been approved, and is
  * everything ready for production.
  *
- * The last answer is always no, deliberately: production customer sending has not
- * been enabled, the button below is locked, and there is no route behind it. Every
- * other question is answered from live data plus the frozen audience.
+ * Customer delivery requires an external runtime release and an explicit scheduling
+ * action. Preparation and approval alone never submit a message.
  */
 
 export const dynamic = "force-dynamic";
@@ -175,6 +179,9 @@ export default async function ReadinessPage({
 
   const readiness = await getSendReadiness(id);
   if (!readiness) notFound();
+  const release = await getCustomerReleaseStatus();
+  const campaign = await getNewsletter(id);
+  if (!campaign) notFound();
 
   const inspection =
     view !== null ? await inspectFinalAudience(id, { view, page }) : null;
@@ -710,7 +717,7 @@ export default async function ReadinessPage({
             <p className="text-xs text-slate-600">
               {ledger.total === 0
                 ? "None prepared"
-                : `${ledger.total.toLocaleString()} prepared · none sent`}
+                : `${ledger.total.toLocaleString()} delivery records`}
             </p>
           </div>
 
@@ -736,7 +743,9 @@ export default async function ReadinessPage({
                 </ul>
               ) : null}
               <p className="mt-2 text-xs font-semibold text-slate-700">
-                PREPARED / NOT SENT — no message has been submitted to any provider.
+                {Object.keys(ledger.byState).every(state => state === "PENDING" || state === "READY")
+                  ? "PREPARED / NOT SENT — no message has been submitted to any provider."
+                  : "Provider acceptance is separate from delivery. Open Reports for confirmed outcomes."}
               </p>
             </>
           ) : null}
@@ -746,7 +755,7 @@ export default async function ReadinessPage({
               campaignId={id}
               action={prepareDeliveryLedgerAction}
               eligibleCount={frozen?.uniqueDestinations ?? 0}
-              disabled={readiness.approval?.valid !== true || !readiness.fourEyes.satisfied}
+              disabled={campaign.status !== "DRAFT" || readiness.approval?.valid !== true || !readiness.fourEyes.satisfied}
               blockedReason={
                 readiness.approval?.valid !== true
                   ? "Approve this newsletter and its audience first."
@@ -762,27 +771,23 @@ export default async function ReadinessPage({
       {/* --------------------------- production ---------------------------- */}
       <Card className="p-6">
         <div className="flex flex-wrap items-center gap-3">
-          <h2 className="text-lg font-bold text-slate-900">Production send</h2>
-          <Badge tone="danger">Locked</Badge>
+          <h2 className="text-lg font-bold text-slate-900">Customer delivery</h2>
+          <Badge tone={release.enabled ? "success" : "warning"}>{release.enabled ? "Release configured" : "Locked"}</Badge>
         </div>
         <p className="mt-2 text-sm text-slate-700">
-          Production customer sending has not been enabled.
+          {release.enabled ? "Review the exact customer message before confirming its audience and delivery time." : "Production customer sending has not been enabled."}
         </p>
         <p className="mt-1 text-sm text-slate-600">
-          There is no button here and no hidden route behind it — the delivery engine
-          for real customer email is not built yet. Everything on this page prepares for
-          that step without taking it. To send a real message today, use the safe test
-          email on the preview page, which always goes to the one authorised test
-          address.
+          Scheduled delivery freezes this message and its approved audience. A missed
+          start time requires review; an uncertain submission is never automatically retried.
         </p>
-        <div className="mt-4">
-          <span
-            aria-disabled="true"
-            className="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-400"
-          >
-            🔒 Send to customers — unavailable
-          </span>
-        </div>
+        <div className="mt-5"><EmailPreview html={renderProduction(campaign).html}/></div>
+        <CustomerDeliveryControls campaignId={id} count={campaign.deliveryConfirmedCount ?? frozen?.uniqueDestinations ?? 0}
+          status={campaign.status} enabled={release.enabled && (campaign.status !== "DRAFT" ||
+            (readiness.preparationComplete && readiness.approval?.valid === true && frozen?.consentNotConfirmed === 0))}
+          blockers={[...release.blockers, ...(frozen?.consentNotConfirmed ? ["Record confirmed consent for every intended recipient before customer delivery."] : []),
+            ...(campaign.status === "DRAFT" && !readiness.preparationComplete ? ["Complete the audience, content and second-person approval checks above."] : [])]}/>
+        <Link href={`/reports/${id}`} className={`${buttonSecondary} mt-5`}>Open delivery report</Link>
       </Card>
 
       {/* ------------------------------ sender ----------------------------- */}

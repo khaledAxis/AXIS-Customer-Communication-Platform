@@ -356,14 +356,16 @@ export interface ResolvedAudience {
 export async function resolveAudienceForDefinition(
   rawDefinition: unknown,
   options: PreviewOptions = {},
+  emailScope?: readonly string[],
 ): Promise<ResolvedAudience> {
+  if (emailScope && (emailScope.length === 0 || emailScope.length > 1000)) throw new Error("Audience lookup scope is outside its bound.");
   const definition = parseSegmentDefinition(rawDefinition);
   const now = options.now ?? new Date();
   const requireLanguage = options.requireLanguage ?? null;
   const requireExplicitConsent = options.requireExplicitConsent === true;
 
   const { candidates, companyNames, contactNames, matchedCompanies, matchedContacts } =
-    await resolveSegmentCandidates(getPrisma(), definition, now);
+    await resolveSegmentCandidates(getPrisma(), definition, now, emailScope);
 
   const result = resolveAudience(candidates, {
     requireLanguage: requireLanguage ?? undefined,

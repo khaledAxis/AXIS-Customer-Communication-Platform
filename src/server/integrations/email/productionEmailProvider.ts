@@ -89,6 +89,8 @@ export interface ProductionEmailProvider {
    * evidence that a real submission happened.
    */
   send(message: ProductionEmailMessage): Promise<ProviderSendResult>;
+  /** Customer path is explicit and separately environment-gated; pilot callers never use it. */
+  sendCustomer?(message: ProductionEmailMessage): Promise<ProviderSendResult>;
 
   /**
    * Reads the sending domain's authentication state FROM the provider.

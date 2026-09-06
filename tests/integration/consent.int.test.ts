@@ -489,7 +489,16 @@ d("communication consent", () => {
   // ---- 11 bulk safety -----------------------------------------------------
 
   it("changes only the selected rows in a bulk operation", async () => {
-    const before = await getConsentCounts();
+    // Other suites legitimately change their own synthetic addresses concurrently.
+    // Check every row owned by this fixture rather than comparing global counters.
+    const ownedCounts = async () => {
+      const rows = await prisma.communicationAddress.findMany({
+        where: { normalizedEmail: { in: ALL_EMAILS } }, select: { consentStatus: true },
+      });
+      return { GRANTED: rows.filter(row => row.consentStatus === "GRANTED").length,
+        UNKNOWN: rows.filter(row => row.consentStatus === "UNKNOWN").length };
+    };
+    const before = await ownedCounts();
 
     await setConsent(grant([idOf(EMAILS.plain), idOf(EMAILS.second)]));
 
@@ -498,8 +507,8 @@ d("communication consent", () => {
     expect((await read(EMAILS.third)).consentStatus).toBe(ConsentStatus.UNKNOWN);
     expect((await read(EMAILS.untouched)).consentStatus).toBe(ConsentStatus.UNKNOWN);
 
-    const after = await getConsentCounts();
-    // Exactly two moved — nothing else in the database was swept along.
+    const after = await ownedCounts();
+    // Exactly the two selected fixtures moved; the unselected fixtures remain intact.
     expect(after.GRANTED - before.GRANTED).toBe(2);
     expect(before.UNKNOWN - after.UNKNOWN).toBe(2);
   });

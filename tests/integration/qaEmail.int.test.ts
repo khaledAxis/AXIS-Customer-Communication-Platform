@@ -18,6 +18,7 @@ import type {
 import { setQaEmailProviderForTesting } from "../../src/server/integrations/email/qaEmailProvider";
 import * as qa from "../../src/server/services/qaEmailService";
 import { actAs, actAsNobody, clearTestActor, createTestUser, type TestUser } from "../support/actor";
+import { acquireQaQuotaTestLock } from "../support/qaQuotaLock";
 
 /**
  * The QA email allowlist, end to end (ADR-0027).
@@ -68,6 +69,7 @@ d("QA email allowlist", () => {
   let prisma: ReturnType<typeof getPrisma>;
   let provider: RecordingQaProvider;
   let operator: TestUser;
+  let releaseQuotaLock: (() => Promise<void>) | undefined;
   const savedEnv: Record<string, string | undefined> = {};
 
   /**
@@ -78,6 +80,7 @@ d("QA email allowlist", () => {
   const OWNER = `qa-allowlist-${randomUUID().slice(0, 12)}`;
 
   beforeAll(async () => {
+    releaseQuotaLock = await acquireQaQuotaTestLock();
     operator = await createTestUser({ prefix: "qa", role: "ADMIN" });
     actAs(operator);
     prisma = getPrisma();
@@ -121,7 +124,7 @@ d("QA email allowlist", () => {
       await ledger.deleteFixtures(OWNER);
       await prisma.user.deleteMany({ where: { id: operator.id } });
     } finally {
-      await prisma.$disconnect();
+      try { await prisma?.$disconnect(); } finally { await releaseQuotaLock?.(); }
     }
   });
 
@@ -139,7 +142,7 @@ d("QA email allowlist", () => {
 
     for (const recipient of QA_ALLOWED_RECIPIENTS) {
       const result = await qa.sendQaEmail({ scenarioId: SCENARIO, recipient });
-      expect(result.ok, `${recipient} should be accepted`).toBe(true);
+      expect(result.ok, `${recipient} should be accepted: ${result.outcome}: ${result.message}`).toBe(true);
       expect(result.outcome).toBe("ACCEPTED");
       expect(result.providerCalls).toBe(1);
       expect(result.providerMessageId).toBeTruthy();
@@ -302,14 +305,20 @@ d("QA email allowlist", () => {
 
   it("creates no CampaignRecipient and no CampaignEvent", async () => {
     install(new RecordingQaProvider());
-    const before = await prisma.campaignRecipient.count();
-
-    await qa.sendQaEmail({ scenarioId: SCENARIO, recipient: "saja@axis-gps.com" });
+    const result = await qa.sendQaEmail({ scenarioId: SCENARIO, recipient: "saja@axis-gps.com" });
+    expect(result.ok).toBe(true);
+    expect(provider.submissions).toHaveLength(1);
 
     // QA lives in its own tables (ADR-0028) and touches no campaign ledger at all.
-    expect(await prisma.campaignRecipient.count()).toBe(before);
-    expect(await prisma.campaignEvent.count()).toBe(0);
-    expect(await prisma.campaignTestSend.count({ where: { channel: "QA_EMAIL" } })).toBe(
+    // Other suites/browser fixtures legitimately own events in this shared TEST DB.
+    // Check our actor and unique provider receipt, never an unrelated global count.
+    const where = { OR: [
+      { campaign: { createdById: operator.id } },
+      { providerMessageId: result.providerMessageId ?? "missing-qa-provider-receipt" },
+    ] };
+    expect(await prisma.campaignRecipient.count({ where })).toBe(0);
+    expect(await prisma.campaignEvent.count({ where })).toBe(0);
+    expect(await prisma.campaignTestSend.count({ where: { channel: "QA_EMAIL", requestedById: operator.id } })).toBe(
       0,
     );
 
@@ -332,6 +341,8 @@ d("QA email allowlist", () => {
     for (const forbidden of [
       "communicationAddress",
       "campaignRecipient",
+      "campaignEvent",
+      "campaignTestSend",
       "campaignFinalAudience",
       "finalAudienceDestination",
       "contact.",

@@ -1,252 +1,125 @@
 import "server-only";
-
-import { DeliveryState, canTransition } from "../../domain/delivery/dispatchPolicy";
-import {
-  ProviderEventType,
-  consequenceOf,
-  type NormalizedProviderEvent,
-} from "../../domain/delivery/providerEvent";
-import { EmailStatus } from "../../domain/types";
+import type { Prisma } from "@prisma/client";
+import { canTransition } from "../../domain/delivery/dispatchPolicy";
+import { ProviderEventType, consequenceOf, type NormalizedProviderEvent } from "../../domain/delivery/providerEvent";
 import { getPrisma } from "../db/prisma";
-
-/**
- * Ingesting provider delivery events (ADR-0024).
- *
- * This is the handler contract a vendor adapter will feed once one is chosen. It takes
- * ALREADY-VERIFIED, already-normalized events: signature checking belongs to the
- * adapter, which is the only code that knows the vendor's scheme. There is deliberately
- * no public webhook route yet — an endpoint that accepted unsigned events would be a
- * way for anyone on the internet to suppress AXIS customers.
- *
- * Two rules this file enforces, both of which outrank anything AXIS recorded:
- *
- *  - a **hard bounce** blocks the address and marks it invalid — the mailbox does not
- *    exist, and staff need to see that as a data-quality problem;
- *  - a **spam complaint** blocks the address and does NOT mark it invalid — the person
- *    has a working mailbox and does not want AXIS in it.
- *
- * Both survive `consentStatus = GRANTED`. Consent says AXIS may write; a complaint
- * says this person does not want to be written to, and the second wins. Nothing here
- * ever clears a suppression.
- */
 
 export type IngestOutcome =
   | { ok: true; duplicate: boolean; effects: string[] }
   | { ok: false; reason: "MALFORMED"; message: string };
 
-function isValidEvent(event: NormalizedProviderEvent): boolean {
-  return (
-    typeof event.providerEventId === "string" &&
-    event.providerEventId.trim() !== "" &&
-    typeof event.normalizedEmail === "string" &&
-    event.normalizedEmail.includes("@") &&
-    event.occurredAt instanceof Date &&
-    !Number.isNaN(event.occurredAt.getTime())
-  );
+const EVENT_TYPES = {
+  ACCEPTED: "ACCEPTED", DELIVERED: "DELIVERED", OPENED: "OPENED", CLICKED: "CLICKED",
+  HARD_BOUNCE: "BOUNCE", SOFT_BOUNCE: "DEFERRED", COMPLAINT: "COMPLAINT",
+  UNSUBSCRIBE: "UNSUBSCRIBE", FAILED: "FAILED",
+} as const;
+
+/** Store verified normalized facts first: webhooks can beat the send response. */
+export async function ingestProviderEvent(event: NormalizedProviderEvent): Promise<IngestOutcome> {
+  if (!event || typeof event.providerEventId !== "string" || !event.providerEventId.trim() ||
+    event.providerEventId.length > 256 || !Object.values(ProviderEventType).includes(event.type) ||
+    typeof event.normalizedEmail !== "string" || !event.normalizedEmail.includes("@") ||
+    !(event.occurredAt instanceof Date) || !Number.isFinite(event.occurredAt.getTime()))
+    return { ok: false, reason: "MALFORMED", message: "That provider event could not be read." };
+  const inserted = await getPrisma().providerWebhookReceipt.createMany({ skipDuplicates: true, data: [{
+    providerEventId: event.providerEventId,
+    normalizedEvent: { ...event, normalizedEmail: event.normalizedEmail.trim().toLowerCase(),
+      occurredAt: event.occurredAt.toISOString() } as Prisma.InputJsonObject,
+  }] });
+  const effects = await applyReceipt(event.providerEventId);
+  return { ok: true, duplicate: inserted.count === 0, effects };
 }
 
-/**
- * Applies one normalized provider event.
- *
- * IDEMPOTENT by `providerEventId`, which every provider re-delivers. The unique index
- * on `CampaignEvent.providerEventId` is the guard: a repeat collides at the database
- * and is reported as a duplicate rather than suppressing an address twice or
- * double-counting a bounce.
- */
-export async function ingestProviderEvent(
-  event: NormalizedProviderEvent,
-): Promise<IngestOutcome> {
-  if (!isValidEvent(event)) {
-    return {
-      ok: false,
-      reason: "MALFORMED",
-      message: "That provider event could not be read.",
-    };
-  }
-
-  const prisma = getPrisma();
-  const normalizedEmail = event.normalizedEmail.trim().toLowerCase();
-  const consequence = consequenceOf(event.type);
-  const effects: string[] = [];
-
-  // Already seen? Providers retry, so this is the normal path, not an error.
-  //
-  // BOTH tables are checked. An event about an address with no ledger row — a bounce
-  // for a pilot, or for a delivery this platform did not record — writes only a
-  // suppression, so checking `CampaignEvent` alone would miss it and the retry would
-  // crash on the suppression's unique index instead of being recognised as a repeat.
-  const [seenEvent, seenSuppression] = await Promise.all([
-    prisma.campaignEvent.findFirst({
-      where: { providerEventId: event.providerEventId },
+async function applyReceipt(id: string): Promise<string[]> {
+  return getPrisma().$transaction(async tx => {
+    await tx.$queryRaw`SELECT "providerEventId" FROM "ProviderWebhookReceipt" WHERE "providerEventId"=${id} FOR UPDATE`;
+    const receipt = await tx.providerWebhookReceipt.findUniqueOrThrow({ where: { providerEventId: id } });
+    if (receipt.processedAt) return [];
+    const stored = receipt.normalizedEvent as unknown as Omit<NormalizedProviderEvent, "occurredAt"> & { occurredAt: string };
+    const event = { ...stored, occurredAt: new Date(stored.occurredAt) };
+    const normalizedEmail = event.normalizedEmail;
+    const consequence = consequenceOf(event.type);
+    const effects: string[] = [];
+    // An email alone cannot identify a campaign. Never guess the newest send.
+    let recipient = event.providerMessageId ? await tx.campaignRecipient.findFirst({
+      where: { normalizedEmail, providerMessageId: event.providerMessageId },
+    }) : null;
+    // Pilot receipts are retained, but never create customer ledger/events.
+    const pilot = !recipient && event.providerMessageId ? await tx.campaignTestSend.findFirst({
+      where: { toEmail: normalizedEmail, providerMessageId: event.providerMessageId, channel: "PROVIDER_PILOT" },
       select: { id: true },
-    }),
-    prisma.suppressionEvent.findFirst({
-      where: { providerEventId: event.providerEventId },
-      select: { id: true },
-    }),
-  ]);
-  if (seenEvent || seenSuppression) return { ok: true, duplicate: true, effects: [] };
-
-  const recipient = await prisma.campaignRecipient.findFirst({
-    where: {
-      normalizedEmail,
-      ...(event.providerMessageId
-        ? { providerMessageId: event.providerMessageId }
-        : {}),
-    },
-    orderBy: [{ createdAt: "desc" }],
-    select: { id: true, campaignId: true, state: true },
-  });
-
-  await prisma.$transaction(async (tx) => {
+    }) : null;
     if (recipient) {
-      await tx.campaignEvent.create({
-        data: {
-          campaignId: recipient.campaignId,
-          recipientId: recipient.id,
-          normalizedEmail,
-          type: toCampaignEventType(event.type),
-          providerEventId: event.providerEventId,
-          providerMessageId: event.providerMessageId ?? null,
-          occurredAt: event.occurredAt,
-          // Sanitized reason only — never a raw payload that could carry a credential.
-          payload: event.reason ? { reason: event.reason } : undefined,
-        },
-      });
-      effects.push("event recorded");
-
-      // The state machine decides, not the event: an out-of-order webhook cannot walk
-      // a delivery backwards.
-      if (
-        consequence.deliveryState &&
-        canTransition(recipient.state as DeliveryState, consequence.deliveryState)
-      ) {
-        await tx.campaignRecipient.update({
-          where: { id: recipient.id },
-          data: {
-            state: consequence.deliveryState,
-            deliveredAt:
-              consequence.deliveryState === DeliveryState.DELIVERED
-                ? event.occurredAt
-                : undefined,
-            bouncedAt:
-              consequence.deliveryState === DeliveryState.BOUNCED
-                ? event.occurredAt
-                : undefined,
-            complainedAt:
-              consequence.deliveryState === DeliveryState.COMPLAINED
-                ? event.occurredAt
-                : undefined,
-            failureReason: event.reason ?? undefined,
-          },
-        });
-        effects.push(`delivery ${consequence.deliveryState.toLowerCase()}`);
+      await tx.$queryRaw`SELECT id FROM "CampaignRecipient" WHERE id=${recipient.id} FOR UPDATE`;
+      recipient = await tx.campaignRecipient.findUniqueOrThrow({ where: { id: recipient.id } });
+      const recorded = await tx.campaignEvent.createMany({ skipDuplicates: true, data: [{
+        campaignId: recipient.campaignId, recipientId: recipient.id, normalizedEmail,
+        type: EVENT_TYPES[event.type], providerEventId: id, providerMessageId: event.providerMessageId,
+        occurredAt: event.occurredAt, payload: event.reason ? { reason: event.reason } : undefined,
+      }] });
+      if (recorded.count) {
+        const earlier = (old: Date | null) => !old || event.occurredAt < old ? event.occurredAt : old;
+        const data: Prisma.CampaignRecipientUpdateInput = {};
+        if (consequence.deliveryState && canTransition(recipient.state, consequence.deliveryState)) {
+          data.state = consequence.deliveryState;
+          effects.push(`delivery ${consequence.deliveryState.toLowerCase()}`);
+        }
+        // Signed facts remain valid after an out-of-order complaint. Opens never prove delivery.
+        if (event.type === "ACCEPTED") data.sentAt = earlier(recipient.sentAt);
+        if (event.type === "DELIVERED") data.deliveredAt = earlier(recipient.deliveredAt);
+        if (event.type === "OPENED") data.firstOpenedAt = earlier(recipient.firstOpenedAt);
+        if (event.type === "CLICKED") data.firstClickedAt = earlier(recipient.firstClickedAt);
+        if (event.type === "HARD_BOUNCE") data.bouncedAt = earlier(recipient.bouncedAt);
+        if (event.type === "COMPLAINT") data.complainedAt = earlier(recipient.complainedAt);
+        await tx.campaignRecipient.update({ where: { id: recipient.id }, data });
+        effects.push("event recorded");
       }
     }
-
-    if (consequence.suppression) {
-      // Append-only history of the fact...
-      await tx.suppressionEvent.create({
-        data: {
-          normalizedEmail,
-          reason: consequence.suppression,
-          source: "PROVIDER_WEBHOOK",
-          providerEventId: event.providerEventId,
-          occurredAt: event.occurredAt,
-          payload: event.reason ? { reason: event.reason } : undefined,
-        },
-      });
-
-      // ...and the effective state, which is what eligibility reads. Unique on
-      // (normalizedEmail, reason), so a repeated bounce does not accumulate rows.
-      await tx.suppression.upsert({
-        where: {
-          normalizedEmail_reason: {
-            normalizedEmail,
-            reason: consequence.suppression,
-          },
-        },
-        create: {
-          normalizedEmail,
-          reason: consequence.suppression,
-          occurredAt: event.occurredAt,
-        },
-        update: {},
-      });
-      effects.push(`suppressed (${consequence.suppression.toLowerCase()})`);
-    }
-
-    if (consequence.markEmailInvalid) {
-      // Only a hard bounce reaches here. A complaint must NOT corrupt the address's
-      // validity — the mailbox works, the person simply does not want the mail.
-      await tx.communicationAddress.updateMany({
-        where: { normalizedEmail },
-        data: { emailStatus: EmailStatus.INVALID },
-      });
-      effects.push("address marked invalid");
-    }
-
-    if (consequence.unsubscribe) {
-      const existing = await tx.unsubscribe.findUnique({
-        where: { normalizedEmail_scope: { normalizedEmail, scope: "GLOBAL" } },
-        select: { id: true },
-      });
-      if (!existing) {
-        await tx.unsubscribe.create({
-          data: {
-            normalizedEmail,
-            scope: "GLOBAL",
-            source: "PROVIDER_WEBHOOK",
-            reason: event.reason ?? "Unsubscribe reported by the email provider.",
-            occurredAt: event.occurredAt,
-          },
-        });
+    if (!receipt.effectsAppliedAt) {
+      if (consequence.suppression) {
+        await tx.suppressionEvent.createMany({ skipDuplicates: true, data: [{ normalizedEmail,
+          reason: consequence.suppression, source: "PROVIDER_WEBHOOK", providerEventId: id,
+          occurredAt: event.occurredAt, payload: event.reason ? { reason: event.reason } : undefined,
+        }] });
+        await tx.suppression.upsert({ where: { normalizedEmail_reason: { normalizedEmail, reason: consequence.suppression } },
+          create: { normalizedEmail, reason: consequence.suppression, occurredAt: event.occurredAt }, update: {} });
+        effects.push(`suppressed (${consequence.suppression.toLowerCase()})`);
+      }
+      if (consequence.markEmailInvalid) {
+        await tx.communicationAddress.updateMany({ where: { normalizedEmail }, data: { emailStatus: "INVALID" } });
+        effects.push("address marked invalid");
+      }
+      if (consequence.unsubscribe) {
+        await tx.unsubscribe.upsert({ where: { normalizedEmail_scope: { normalizedEmail, scope: "GLOBAL" } },
+          create: { normalizedEmail, scope: "GLOBAL", source: "PROVIDER_WEBHOOK", campaignId: recipient?.campaignId,
+            reason: event.reason ?? "Unsubscribe reported by the email provider.", occurredAt: event.occurredAt }, update: {} });
         effects.push("unsubscribed");
       }
+      await tx.auditLog.create({ data: { action: "PROVIDER_EVENT_INGESTED", actorUserId: null,
+        entityType: "CampaignRecipient", entityId: recipient?.id, toState: consequence.deliveryState ?? event.type,
+        metadata: { normalizedEmail, providerEventId: id, type: event.type, effects, actor: "PROVIDER_WEBHOOK" } } });
     }
-
-    await tx.auditLog.create({
-      data: {
-        action: "PROVIDER_EVENT_INGESTED",
-        // No actor: a provider is not an AXIS employee, exactly as a recipient is not.
-        actorUserId: null,
-        entityType: "CampaignRecipient",
-        entityId: recipient?.id ?? null,
-        toState: consequence.deliveryState ?? event.type,
-        metadata: {
-          normalizedEmail,
-          providerEventId: event.providerEventId,
-          type: event.type,
-          effects,
-          actor: "PROVIDER_WEBHOOK",
-        },
-      },
-    });
+    await tx.providerWebhookReceipt.update({ where: { providerEventId: id }, data: {
+      effectsAppliedAt: receipt.effectsAppliedAt ?? new Date(),
+      processedAt: recipient || pilot || !event.providerMessageId ? new Date() : null,
+    } });
+    return effects;
   });
-
-  return { ok: true, duplicate: false, effects };
 }
 
-function toCampaignEventType(
-  type: ProviderEventType,
-): "DELIVERED" | "BOUNCE" | "COMPLAINT" | "UNSUBSCRIBE" | "FAILED" | "DEFERRED" {
-  switch (type) {
-    case ProviderEventType.ACCEPTED:
-      // No dedicated CampaignEventType exists for acceptance; DELIVERED is the closest
-      // provider-event bucket, and the authoritative fact lives on the recipient's
-      // state (ACCEPTED), which is what eligibility and reporting read.
-      return "DELIVERED";
-    case ProviderEventType.DELIVERED:
-      return "DELIVERED";
-    case ProviderEventType.HARD_BOUNCE:
-      return "BOUNCE";
-    case ProviderEventType.SOFT_BOUNCE:
-      return "DEFERRED";
-    case ProviderEventType.COMPLAINT:
-      return "COMPLAINT";
-    case ProviderEventType.UNSUBSCRIBE:
-      return "UNSUBSCRIBE";
-    case ProviderEventType.FAILED:
-      return "FAILED";
-  }
+/** Skip unmatched orphans so old receipts cannot starve new correlations. */
+export async function reconcileProviderReceipts() {
+  const pending = await getPrisma().$queryRaw<{ providerEventId: string }[]>`
+    SELECT r."providerEventId" FROM "ProviderWebhookReceipt" r
+    WHERE r."processedAt" IS NULL AND (EXISTS (
+      SELECT 1 FROM "CampaignRecipient" c
+      WHERE c."providerMessageId" = r."normalizedEvent"->>'providerMessageId'
+      AND c."normalizedEmail" = r."normalizedEvent"->>'normalizedEmail') OR EXISTS (
+      SELECT 1 FROM "CampaignTestSend" t
+      WHERE t."channel" = 'PROVIDER_PILOT'
+      AND t."providerMessageId" = r."normalizedEvent"->>'providerMessageId'
+      AND t."toEmail" = r."normalizedEvent"->>'normalizedEmail'))
+    ORDER BY r."receivedAt" LIMIT 100`;
+  for (const row of pending) await applyReceipt(row.providerEventId);
+  return pending.length;
 }

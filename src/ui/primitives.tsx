@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import type { Tone } from "./labels";
+import { Icon } from "./Icon";
 
 /**
  * Small presentational building blocks shared by every page.
@@ -21,7 +22,7 @@ const TONE_CLASSES: Record<Tone, string> = {
 export function Badge({ tone = "neutral", children }: { tone?: Tone; children: ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${TONE_CLASSES[tone]}`}
+      className={`axis-badge ring-1 ring-inset ${TONE_CLASSES[tone]}`}
     >
       {children}
     </span>
@@ -30,7 +31,7 @@ export function Badge({ tone = "neutral", children }: { tone?: Tone; children: R
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}>{children}</div>
+    <div className={`axis-card ${className}`}>{children}</div>
   );
 }
 
@@ -44,27 +45,23 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
+    <div className="page-header">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-slate-900">{title}</h1>
-        {description ? <p className="mt-2 max-w-2xl text-slate-600">{description}</p> : null}
+        <h1>{title}</h1>
+        {description ? <p>{description}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-3">{actions}</div> : null}
     </div>
   );
 }
 
-export const buttonPrimary =
-  "inline-flex items-center justify-center gap-2 rounded-lg bg-sky-700 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500";
+export const buttonPrimary = "axis-button axis-button-primary";
 
-export const buttonSecondary =
-  "inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:text-slate-400";
+export const buttonSecondary = "axis-button axis-button-secondary";
 
-export const buttonDanger =
-  "inline-flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm transition hover:bg-rose-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2";
+export const buttonDanger = "axis-button axis-button-danger";
 
-export const buttonSubtle =
-  "inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-600 disabled:cursor-not-allowed disabled:text-slate-300";
+export const buttonSubtle = "axis-button axis-button-subtle";
 
 export function EmptyState({
   title,
@@ -80,9 +77,9 @@ export function EmptyState({
   icon?: string;
 }) {
   return (
-    <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/60 px-6 py-16 text-center">
-      <div aria-hidden className="text-4xl">
-        {icon}
+    <div className="empty-state">
+      <div aria-hidden className="empty-state-icon" data-illustration={icon}>
+        <Icon name="article" size={28} />
       </div>
       <h2 className="mt-4 text-lg font-semibold text-slate-900">{title}</h2>
       <p className="mx-auto mt-2 max-w-md text-sm text-slate-600">{description}</p>
@@ -121,8 +118,7 @@ export function Field({
   );
 }
 
-export const inputClass =
-  "block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-600/20";
+export const inputClass = "axis-input";
 
 export function ErrorSummary({ errors }: { errors: { field: string; message: string }[] }) {
   if (errors.length === 0) return null;
@@ -138,16 +134,13 @@ export function ErrorSummary({ errors }: { errors: { field: string; message: str
   );
 }
 
-/** Always-visible reminder that nothing can reach customers yet. */
-export function TestModeBanner() {
+/** Customer delivery stays locked; provider setup alone is not activation. */
+export function TestModeBanner({ customerDeliveryConfigured = false }: { customerDeliveryConfigured?: boolean }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-amber-200 bg-amber-50 px-6 py-2.5 text-sm">
-      <span className="inline-flex items-center rounded-full bg-amber-200/70 px-2.5 py-0.5 text-xs font-bold uppercase tracking-wide text-amber-900">
-        Test mode
-      </span>
-      <span className="text-amber-900">
-        No email is sent to customers. Sending is disabled until an email provider is set up.
-      </span>
+    <div className="mode-banner">
+      <span className="mode-badge">{customerDeliveryConfigured ? "CUSTOMER DELIVERY CONFIGURED" : "TEST MODE"}</span>
+      <span>{customerDeliveryConfigured ? "Approved and explicitly confirmed newsletters can reach customers. Review each delivery before scheduling." : "Customer delivery is locked. Safe tests go only to the authorised address."}</span>
+      <Link href="/help">About test mode</Link>
     </div>
   );
 }

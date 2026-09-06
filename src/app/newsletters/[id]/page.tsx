@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BidiText } from "../../../ui/BidiText";
 import { notFound } from "next/navigation";
 
 import { getCampaignAudience } from "../../../server/services/campaignAudienceService";
@@ -122,14 +123,14 @@ export default async function NewsletterBuilderPage({ params }: { params: Promis
 
                     <div className="min-w-[12rem] flex-1">
                       <p dir={rtl ? "rtl" : "ltr"} className="font-semibold text-slate-900">
-                        {link.contentItem.title}
+                        <BidiText text={link.contentItem.title} dir={rtl ? "rtl" : "ltr"} />
                       </p>
                       {link.contentItem.summary ? (
                         <p
                           dir={rtl ? "rtl" : "ltr"}
                           className="mt-1 line-clamp-2 text-sm text-slate-600"
                         >
-                          {link.contentItem.summary}
+                          <BidiText text={link.contentItem.summary} dir={rtl ? "rtl" : "ltr"} />
                         </p>
                       ) : null}
                       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -230,7 +231,7 @@ export default async function NewsletterBuilderPage({ params }: { params: Promis
                 {available.map((item) => (
                   <li key={item.id} className="rounded-lg border border-slate-200 p-3">
                     <p dir={rtl ? "rtl" : "ltr"} className="text-sm font-semibold text-slate-900">
-                      {item.title}
+                      <BidiText text={item.title} dir={rtl ? "rtl" : "ltr"} />
                     </p>
                     <div className="mt-2 flex items-center justify-between gap-2">
                       <Badge tone="info">{LANGUAGE_LABEL[item.language]}</Badge>

@@ -9,8 +9,12 @@ provider with delivery and engagement tracking.
 
 This is an **internal tool**, not a public SaaS product.
 
-> **Status:** Foundation / Milestone 0. The engineering foundation and documentation are in place;
-> feature modules are not implemented yet. See [`docs/development-plan.md`](docs/development-plan.md).
+> **Status:** Staff authentication, Monday CRM projection, content/newsletter workflows and safe test
+> tooling are implemented. Durable scheduling, signed Monday intake, guarded customer dispatch,
+> delivery/engagement reporting, portable hosting and recovery tooling are implemented and tested.
+> **Customer delivery remains disabled by default; no external hosting has been provisioned.**
+> See the [workflow runbook](docs/workflow-operations.md) and [capacity measurements](docs/capacity.md).
+> See [`docs/development-plan.md`](docs/development-plan.md) and the [operations runbook](docs/operations.md).
 
 > **Data direction:** Monday.com → this platform is **read-only** in v1. The platform never writes
 > CRM state back to Monday. Communication state (email validity, unsubscribe, suppression, campaigns,
@@ -28,11 +32,12 @@ This is an **internal tool**, not a public SaaS product.
 
 | Document | Purpose |
 | --- | --- |
-| [`CLAUDE.md`](CLAUDE.md) | Operating manual and engineering rules (read first) |
+| [`AGENTS.md`](AGENTS.md) | Operating manual and engineering rules (read first) |
 | [`docs/requirements.md`](docs/requirements.md) | Goals, users, functional & non-functional requirements, MVP scope, business rules |
 | [`docs/architecture.md`](docs/architecture.md) | System components, boundaries, data flow, diagrams |
 | [`docs/development-plan.md`](docs/development-plan.md) | Milestone plan (M0–M13) with Definition of Done |
 | [`docs/decisions/`](docs/decisions/) | Architecture Decision Records (ADRs) |
+| [`docs/operations.md`](docs/operations.md) | Portable hosting, CI, health, backups, recovery and scaling |
 
 ## Technology Stack
 
@@ -49,7 +54,7 @@ only, never a required step in a business workflow. See [`CLAUDE.md`](CLAUDE.md#
 
 ## Prerequisites
 
-- **Node.js 20+** (developed on Node 24)
+- **Node.js 24** (also used by hosted images and CI)
 - **npm 10+**
 - **Docker** (for local PostgreSQL, from the database milestone onward)
 - **Monday.com API access** (token + board ids), from the CRM sync milestone onward
@@ -76,10 +81,15 @@ npm run dev                       # http://localhost:3000
 | `npm run start` | Run the production build |
 | `npm run lint` | Lint with ESLint |
 | `npm run typecheck` | Type-check with `tsc --noEmit` |
-| `npm test` | Unit tests (+ DB integration tests when `DATABASE_URL` is set) |
+| `npm test` | Unit/integration tests; requires guarded synthetic `TEST_DATABASE_URL` |
 | `npm run db:deploy` | Apply `prisma/migrations` to the configured database |
 | `npm run db:migrate` | Create/apply a dev migration (`prisma migrate dev`) |
 | `npm run db:generate` | Regenerate the Prisma client |
+| `npm run ops:manifest` | Regenerate expected migration checksums after schema changes |
+| `npm run ops:manifest:check` | Refuse a stale migration manifest |
+| `npm run ops:test` | Operational configuration/encryption safety tests |
+| `npm run ops:smoke` | Isolated two-replica Docker and encrypted restore rehearsal |
+| `npm run ops:backup -- <command>` | Infrastructure-only encrypted backup/guarded restore tool |
 
 ### Local development database (developers only)
 
@@ -93,14 +103,17 @@ docker compose up -d                     # see compose.yaml (localhost-only, hea
 # 2. Point Prisma at it (git-ignored; never commit real secrets)
 echo 'DATABASE_URL="postgresql://axis:axis_dev_password@localhost:5432/axis_ccp_dev?schema=public"' >> .env.local
 
-# 3. Apply the initial migration and run the full test suite
-npm run db:deploy                        # applies prisma/migrations/…_init
-npm test                                 # unit + integration tests
+# 3. Apply reviewed migrations to the configured development database
+npm run db:deploy
+# Automated tests require a SEPARATE synthetic database: see docs/testing.md.
+# Set TEST_DATABASE_URL, then:
+npm run test:db:migrate
+npm test
 ```
 
-> The initial migration (`prisma/migrations/…_init`) is already generated and constraint-audited.
-> Without a running PostgreSQL/`DATABASE_URL`, migration and integration tests are **BLOCKED**
-> (integration suites self-skip) — never substitute SQLite.
+> `axis_ccp_dev` contains operational AXIS data and must never be reset, seeded or used by tests.
+> Tests fail closed without an explicitly configured synthetic database ending `_test`.
+> See [the isolation/setup guide](docs/testing.md); never substitute SQLite or copy operational data.
 
 ## Project Structure
 
@@ -119,3 +132,11 @@ settings. Sending safety is enforced **server-side**. See [`CLAUDE.md`](CLAUDE.m
 ## License
 
 See [`LICENSE`](LICENSE).
+
+## Reviewed Hebrew article translation
+
+External articles can be prepared as separate Hebrew drafts with source comparison,
+RTL editing and human approval. See [setup and workflow](docs/hebrew-translation.md).
+OpenAI translation stays disabled until an administrator supplies the API configuration.
+Regular ChatGPT also works through the [copy/paste translation flow](docs/chatgpt-translation.md),
+which requires no API key or API credits.

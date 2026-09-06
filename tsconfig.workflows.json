@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["tests/integration/completedWorkflows.int.test.ts", "tests/integration/prismaCacheRecovery.int.test.ts"],
+  "exclude": ["node_modules"],
+  "compilerOptions": { "incremental": false }
+}

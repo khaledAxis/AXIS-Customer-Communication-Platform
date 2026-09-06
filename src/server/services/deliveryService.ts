@@ -469,6 +469,7 @@ export type DispatchRunResult =
       submitted: number;
       vetoed: number;
       providerCalls: number;
+      remaining: number;
     };
 
 /**
@@ -484,8 +485,8 @@ export type DispatchRunResult =
  * approval; enabling it must grant nothing at all on this path, and the surest way to
  * guarantee that is for this function never to read it.
  *
- * There is no scheduler, no cron entry and no queue consumer that calls this. It is
- * reached only by a deliberate call.
+ * ADR-0035's leased worker calls this only for persisted, explicitly confirmed
+ * customer-delivery jobs. Every recipient claim remains idempotent before I/O.
  */
 export async function dispatchCampaign(campaignId: string): Promise<DispatchRunResult> {
   await requireCapability(Capability.APPROVE_PRODUCTION);
@@ -516,11 +517,6 @@ export async function dispatchCampaign(campaignId: string): Promise<DispatchRunR
     };
   }
 
-  void campaignId;
-  // Unreachable in this milestone by construction. Left unimplemented on purpose:
-  // writing a fan-out loop that has never been exercised against a real provider, and
-  // that no test may run against one, would be worse than an explicit refusal.
-  throw new DeliveryError(
-    "Production dispatch is not implemented. Enabling the switch does not implement it.",
-  );
+  const { executeCustomerDispatch } = await import("./productionDispatchService");
+  return executeCustomerDispatch(campaignId);
 }

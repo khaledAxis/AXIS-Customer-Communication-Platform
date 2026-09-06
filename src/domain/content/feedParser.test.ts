@@ -210,6 +210,18 @@ describe("stripMarkup", () => {
   });
 
   it("leaves no executable fragment behind", () => {
-    expect(stripMarkup("<script>alert(1)</script>text")).toBe("alert(1) text");
+    expect(stripMarkup("<script>alert(1)</script>text")).toBe("text");
+  });
+  it("decodes HTML before excerpting and extracts the publisher's embedded image", () => {
+    const parsed = parseFeed(`<rss><channel><item><title>Surveying update</title><link>https://example.com/news/update</link><description>&lt;div class="hs-featured-image-wrapper"&gt;&lt;img src="/hero.jpg"&gt;&lt;/div&gt;&lt;p&gt;Useful &lt;b&gt;surveying&lt;/b&gt; news.&lt;/p&gt;</description></item></channel></rss>`);
+    if (!parsed.ok) throw new Error('expected feed');
+    expect(parsed.feed.items[0].summary).toBe('Useful surveying news.');
+    expect(parsed.feed.items[0].imageUrl).toBe('https://example.com/hero.jpg');
+  });
+  it("accepts RSS content:encoded and Atom XHTML without retaining raw tags", () => {
+    const rss = parseFeed('<rss><channel><item><title>T</title><content:encoded><![CDATA[<p>Fallback <b>excerpt</b>.</p>]]></content:encoded></item></channel></rss>');
+    const atom = parseFeed('<feed><entry><title>T</title><summary type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>XHTML excerpt.</p></div></summary></entry></feed>');
+    expect(rss.ok && rss.feed.items[0].summary).toBe('Fallback excerpt.');
+    expect(atom.ok && atom.feed.items[0].summary).toBe('XHTML excerpt.');
   });
 });

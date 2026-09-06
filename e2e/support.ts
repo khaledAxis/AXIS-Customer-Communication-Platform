@@ -27,6 +27,7 @@ export interface Credentials {
     qaRunId: string;
     qaSendIds: string[];
     pendingArticleId: string;
+    translatedArticleId: string;
     approvedArticleIds: string[];
   };
 }

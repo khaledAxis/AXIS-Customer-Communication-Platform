@@ -228,6 +228,7 @@ export default async function ContentInboxPage({
           items={items.map((item) => ({
             id: item.id,
             title: item.title,
+            language: item.language,
             axisHeadline: item.axisHeadline,
             summary: item.summary,
             sourceName: item.source?.name ?? item.sourceName,

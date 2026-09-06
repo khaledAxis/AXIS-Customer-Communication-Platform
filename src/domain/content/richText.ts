@@ -14,6 +14,10 @@
  * Pure: no I/O, no framework imports (CLAUDE.md — `domain/` stays testable).
  */
 
+import { articleUrl } from "./articleFormat";
+import { emailDeliveryUrl } from "../media/cloudinaryDelivery";
+import { inlineDirectionFragments } from "./inlineDirection";
+
 /** Only these URL schemes may appear in a generated href. */
 const SAFE_URL = /^(?:https?:\/\/|mailto:)[^\s"'<>`]+$/i;
 
@@ -24,6 +28,19 @@ export function escapeHtml(input: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/** Whole Latin phrases remain readable within Hebrew/Arabic, including in Outlook. */
+export function escapeWithLtrIsolation(raw: string, dir: "rtl" | "ltr"): string {
+  if (dir === "ltr") return escapeHtml(raw);
+  const latin = /(?:[A-Za-z]|[+-]?\d+(?:[.,:/–-]\d+)*[ \t]*(?=[A-Za-z]))[A-Za-z0-9²³°%@._+':/-]*(?:[ \t,&]+[A-Za-z0-9][A-Za-z0-9²³°%@._+':/-]*)*/g;
+  let result = ""; let index = 0;
+  for (const match of raw.matchAll(latin)) {
+    const start = match.index ?? 0;
+    result += escapeHtml(raw.slice(index, start)) + `<span dir="ltr">${escapeHtml(match[0])}</span>`;
+    index = start + match[0].length;
+  }
+  return result + escapeHtml(raw.slice(index));
 }
 
 /**
@@ -48,26 +65,46 @@ const S = {
  * Inline formatting. Input MUST already be HTML-escaped — this only recognises
  * markers that survive escaping (`**`, `*`, `[`, `]`, `(`, `)`).
  */
-function renderInline(escaped: string): string {
-  let out = escaped;
-
-  // [label](url) — the label keeps inline formatting; the URL is scheme-checked.
-  out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (whole, label: string, rawUrl: string) => {
-    // The URL arrives escaped (& -> &amp;), which is valid inside an attribute.
+function renderInline(escaped: string, dir: "ltr" | "rtl", target: "email" | "browser"): string {
+  const isolate = (text: string) => {
+    const raw = text.replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+    return target === "email" ? escapeWithLtrIsolation(raw, dir) : inlineDirectionFragments(raw, dir)
+      .map(part => part.ltr ? `<bdi dir="ltr">${escapeHtml(part.text)}</bdi>` : escapeHtml(part.text)).join("");
+  };
+  // Replace source tokens once: formatting markers inside a URL cannot rewrite a
+  // generated attribute. Only labels receive inline emphasis.
+  const emphasis = (text: string) => {
+    let result = ""; let index = 0;
+    for (const match of text.matchAll(/\*\*([^*]+)\*\*|\*([^*]+)\*/g)) {
+      result += isolate(text.slice(index, match.index)) + (match[1] ? `<strong>${isolate(match[1])}</strong>` : `<em>${isolate(match[2])}</em>`);
+      index = match.index + match[0].length;
+    }
+    return result + isolate(text.slice(index));
+  };
+  const renderToken = (token: string) => {
+    const link = /^(!?)\[([^\]]*)\]\(([^)\s]+)\)$/.exec(token);
+    if (!link) return emphasis(token);
+    const [, image, label, rawUrl] = link;
     const probe = rawUrl.replace(/&amp;/g, "&");
-    if (!isSafeUrl(probe)) return whole; // leave unsafe links as literal text
-    return `<a href="${rawUrl}" style="${S.a}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-  });
-
-  // **bold** before *italic* so the double marker wins.
-  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  out = out.replace(/(^|[^*])\*([^*]+)\*/g, "$1<em>$2</em>");
-
-  return out;
+    if (image) {
+      const url = articleUrl(probe);
+      if (!url) return isolate(label);
+      return `<img src="${escapeHtml(emailDeliveryUrl(url) ?? url)}" alt="${label}" width="540" style="display:block;width:100%;max-width:540px;height:auto;margin:12px 0;border:0;" />`;
+    }
+    if (!isSafeUrl(probe)) return isolate(token);
+    return `<a href="${rawUrl}" style="${S.a}" target="_blank" rel="noopener noreferrer">${emphasis(label)}</a>`;
+  };
+  let result = ""; let index = 0;
+  for (const match of escaped.matchAll(/!?\[[^\]]*\]\([^)\s]+\)|\*\*[^*]+\*\*|\*[^*]+\*/g)) {
+    result += isolate(escaped.slice(index, match.index)) + renderToken(match[0]);
+    index = match.index + match[0].length;
+  }
+  return result + isolate(escaped.slice(index));
 }
 
 type Block =
-  | { kind: "h2" | "h3" | "p"; text: string }
+  | { kind: "h2" | "h3" | "p" | "quote"; text: string }
   | { kind: "ul" | "ol"; items: string[] };
 
 /** Group escaped lines into blocks. Blank lines separate paragraphs. */
@@ -90,11 +127,15 @@ function toBlocks(escapedLines: string[]): Block[] {
       continue;
     }
 
-    const heading = /^(#{2,3})\s+(.*)$/.exec(trimmed);
+    const heading = /^(#{1,6})\s+(.*)$/.exec(trimmed);
     if (heading) {
       flushParagraph();
-      blocks.push({ kind: heading[1].length === 2 ? "h2" : "h3", text: heading[2] });
+      blocks.push({ kind: heading[1].length <= 2 ? "h2" : "h3", text: heading[2] });
       continue;
+    }
+
+    if (trimmed.startsWith("&gt; ")) {
+      flushParagraph(); blocks.push({ kind: "quote", text: trimmed.slice(5) }); continue;
     }
 
     const bullet = /^[-*]\s+(.*)$/.exec(trimmed);
@@ -126,7 +167,7 @@ function toBlocks(escapedLines: string[]): Block[] {
  * Render the restricted source to deterministic, email-safe HTML.
  * Same input always yields byte-identical output (no dates, no randomness).
  */
-export function renderRichText(source: string | null | undefined, dir: "ltr" | "rtl" = "ltr"): string {
+export function renderRichText(source: string | null | undefined, dir: "ltr" | "rtl" = "ltr", target: "email" | "browser" = "email"): string {
   if (!source || source.trim() === "") return "";
 
   const escapedLines = escapeHtml(source).split(/\r?\n/);
@@ -138,16 +179,18 @@ export function renderRichText(source: string | null | undefined, dir: "ltr" | "
         case "ul":
         case "ol": {
           const items = block.items
-            .map((item) => `<li style="${S.li}">${renderInline(item)}</li>`)
+            .map((item) => `<li style="${S.li}">${renderInline(item, dir, target)}</li>`)
             .join("");
           return `<${block.kind} style="${S.list}${listPadding}">${items}</${block.kind}>`;
         }
         case "h2":
-          return `<h2 style="${S.h2}">${renderInline(block.text)}</h2>`;
+          return `<h2 style="${S.h2}">${renderInline(block.text, dir, target)}</h2>`;
         case "h3":
-          return `<h3 style="${S.h3}">${renderInline(block.text)}</h3>`;
+          return `<h3 style="${S.h3}">${renderInline(block.text, dir, target)}</h3>`;
+        case "quote":
+          return `<blockquote style="${S.p}margin:12px 0;padding:12px 16px;background:#f1f5f9;">${renderInline(block.text, dir, target)}</blockquote>`;
         default:
-          return `<p style="${S.p}">${renderInline(block.text)}</p>`;
+          return `<p style="${S.p}">${renderInline(block.text, dir, target)}</p>`;
       }
     })
     .join("");
@@ -157,7 +200,9 @@ export function renderRichText(source: string | null | undefined, dir: "ltr" | "
 export function richTextToPlain(source: string | null | undefined): string {
   if (!source) return "";
   return source
-    .replace(/^#{2,3}\s+/gm, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^>\s*/gm, "")
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, "$1")
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/(^|[^*])\*([^*]+)\*/g, "$1$2")
     .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, "$1 ($2)")

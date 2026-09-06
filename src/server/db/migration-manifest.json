@@ -1,0 +1,102 @@
+[
+  {
+    "name": "20260817120000_init",
+    "checksum": "d48141007228a7845cf9d765a181a43ad46cf6456988c899ea38408edcb65340",
+    "windowsChecksum": "946884c780982b5e2660be525a66af2d4b2a92d2754b67ca880456b914242080"
+  },
+  {
+    "name": "20260817130000_add_content_image_and_campaign_subject",
+    "checksum": "b4d1b96fd5633b7a1ce8609197353e40b0fce294a9cd5bf9736a5b40b1e86a20",
+    "windowsChecksum": "72eb3517b61b024c983ae9d3f8f2d27e81eb1afd37bdc8c194c18efa720f4871"
+  },
+  {
+    "name": "20260817140000_add_test_send_approval_and_provider",
+    "checksum": "2a0f9ccc18a522b6df7bb4eee27655c895fdcd3c7936f61ee3e8425daaeec514",
+    "windowsChecksum": "78321e3162f81bc7a7a6a875474e0e851a1d0e9f336c3713f200866223741d16"
+  },
+  {
+    "name": "20260818090000_add_gmail_smtp_provider",
+    "checksum": "1ea70e1cb4646d79c8d92e8be916f11113134ac55a58e2a551dfc0809130d503",
+    "windowsChecksum": "b3f7888072f428e19978a3037fa001c89d7bc3f437b96ba7b32970083003c2e1"
+  },
+  {
+    "name": "20260818140000_add_newsletter_reply_to",
+    "checksum": "764d1c99e7354da2e264d99863ad83b7fabde2615ed19981b561cbd1268f8877",
+    "windowsChecksum": "c572360e65972793dacc2d1b78abe2e304eb200826aadb917cc5cfcbc29f306b"
+  },
+  {
+    "name": "20260819100000_add_language_change_audit_action",
+    "checksum": "82f7390aa1f1dafabb8948e0ae887738907b5b618631530a971f885fa270d9d8",
+    "windowsChecksum": "72ed50dafcf19acedfd9fbfd6f9ee29fd2db7880c92b44d81a1f91069246564c"
+  },
+  {
+    "name": "20260820062226_add_consent_evidence_and_final_audience",
+    "checksum": "8e334678fbb3aff7149e192736bacf5b90acd2e2c08dccd4a08a6df9572909cd",
+    "windowsChecksum": "3cad9c5b01c5319b4a1e13d2f7e5f4da6089f45c80145aa2652f29101f8b5090"
+  },
+  {
+    "name": "20260820102943_add_authentication_and_audience_idempotency",
+    "checksum": "d9e45f3ff314b177979774eb8e656a1cb75af606704713b7878f809709e06620",
+    "windowsChecksum": "025a82e6f8ba7fec68161a76b5c7b3c5f043519b4b983bdc7dbb2b2e7ff401bb"
+  },
+  {
+    "name": "20260820110347_retire_development_stand_in",
+    "checksum": "114dc10623bfc0fd204f67cff437bbfef0393930d0a6a7fd062cc931d44ba19b",
+    "windowsChecksum": "7aefdcd1e8891c08ed95aec31206e8b5d3a1c62392b27f7217e5af96477e6d48"
+  },
+  {
+    "name": "20260820114034_public_unsubscribe_and_delivery_ledger",
+    "checksum": "e5a62301593be2215188d95b75b2c8f11cf293049a6c27a25482e7f9b7ac05a0",
+    "windowsChecksum": "8b15206849279a26e596e05a86136559a89c157c83e817aa25b067e33eb45779"
+  },
+  {
+    "name": "20260820134039_resend_provider_and_pilot_channel",
+    "checksum": "d4a1542bf6147cc5e183170d8e2fabb8edfbbfe3f03b103480c2df0732ae9406",
+    "windowsChecksum": "d35b5c48b9a30436c5bbbac1f67ce50718f477fd29e104ded1798f978042a19c"
+  },
+  {
+    "name": "20260820160000_content_sources_review_and_automation",
+    "checksum": "a091f353b790449d1b030b5c875c1da1ceda6be8bee1a07f5250e2e6edb5bdcb",
+    "windowsChecksum": "692a71a9554c8951825b6f69c4b641e0613fae8eaa8b1fb3131b7d304493a90e"
+  },
+  {
+    "name": "20260824120000_qa_email_channel",
+    "checksum": "6ea4b16faf7d99803c18375a0ca1150fa06536f068ea448a37052f9de9553692",
+    "windowsChecksum": "3127211c04d215d909fa1ba9185f98fa0ccfcfa1b3c57b8deb4ae552939900ed"
+  },
+  {
+    "name": "20260824140000_durable_qa_ledger",
+    "checksum": "a63808776bb4e02a1b708e641af19f02e9b701377e2dbd4ed61c93b2e83d724f",
+    "windowsChecksum": "2eb3c52bddff40f32b8d016a0dcc5246f982a3b5f03e18eaae270e2e1793dd03"
+  },
+  {
+    "name": "20260824170000_qa_review_checks",
+    "checksum": "27bf57f823a58e49504f55d37db17e8f550c11e87829584f7bd48e1a33b23d67",
+    "windowsChecksum": "ed8b7368779e80dfe234bf708cb730192dd99b2644c879be3e160c69cd3aefab"
+  },
+  {
+    "name": "20260824190000_newsletter_public_page",
+    "checksum": "68a6925489ea4d6e606aa1d1e61468f5c11bb71eee5204898eaefbf4c8c9dd82",
+    "windowsChecksum": "6aef247fdce54da679df04ab23caedd9dc1fa0c7ecd2401842c0df16055ce1b3"
+  },
+  {
+    "name": "20260905150000_shared_hosted_login_throttle",
+    "checksum": "71397cc3915e2de2ae48bf8847435b09d4ba2bfe380383ad621d0f4b8c8db812",
+    "windowsChecksum": "54f54607211804c7caa373a1d8c497387a1e155060874f214ade83fdccad2c55"
+  },
+  {
+    "name": "20260905210000_durable_workflows",
+    "checksum": "e5adc8d7fd661fc73e9a64268d54b5ded83d48984a8c4a87057b9981c061706a",
+    "windowsChecksum": "e95ac2bf4c85f1bbdaa3a696993cad11b441eee810f1894075f4a515047d343f"
+  },
+  {
+    "name": "20260906100000_reviewed_hebrew_translation",
+    "checksum": "12310322d83238e480fb91ae94cc58ff3bd6813a2c807a35ad85afc002dc6358",
+    "windowsChecksum": "7ace2ce9313816872a2470a41a121565dd45bd58194fde07d5a2a0a41c9fdb74"
+  },
+  {
+    "name": "20260906101000_translation_audit_actions",
+    "checksum": "0f0cb06918dd2e668666a7c302bd82dbf45ba5e9349ad6e617ceef0808658da4",
+    "windowsChecksum": "8496249d5433cdafd90a6978f28d8a21d61297a1f51a53d5b23fb4bc9d1c7900"
+  }
+]

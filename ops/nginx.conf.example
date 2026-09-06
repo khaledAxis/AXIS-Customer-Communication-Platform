@@ -1,0 +1,57 @@
+# Install in nginx's http context. Replace server_name/certificate paths.
+# The app's loopback port must remain inaccessible from untrusted networks.
+upstream axis_app {
+    server 127.0.0.1:3000;
+    # Add an identical image replica on another loopback port after capacity testing.
+    keepalive 32;
+}
+map "$request_method:$uri" $axis_login_key {
+    default "";
+    "POST:/login" $binary_remote_addr;
+    "POST:/setup" $binary_remote_addr;
+    "POST:/api/auth/callback/credentials" $binary_remote_addr;
+}
+limit_req_zone $axis_login_key zone=axis_login:10m rate=10r/m;
+# No URL/query, token, cookie, credential, or customer identifier in access logs.
+log_format axis escape=json '{"event":"http_request","status":$status,"method":"$request_method","duration":$request_time,"requestId":"$request_id"}';
+
+server {
+    listen 443 ssl;
+    server_name communication.example.com;
+    ssl_certificate /etc/axis/tls/fullchain.pem;
+    ssl_certificate_key /etc/axis/tls/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    client_max_body_size 6m;
+    client_body_timeout 15s;
+    client_header_timeout 15s;
+    keepalive_timeout 30s;
+    access_log /var/log/nginx/axis-access.log axis;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    # Restrict to the actual load balancer/monitoring subnet when deployed elsewhere.
+    location = /api/health/live {
+        allow 127.0.0.1; allow ::1; deny all;
+        proxy_pass http://axis_app;
+    }
+    location = /api/health/ready {
+        allow 127.0.0.1; allow ::1; deny all;
+        proxy_pass http://axis_app;
+    }
+    location / {
+        limit_req zone=axis_login burst=5 nodelay;
+        limit_req_status 429;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_buffering off;
+        proxy_read_timeout 60s;
+        proxy_pass http://axis_app;
+    }
+}
+

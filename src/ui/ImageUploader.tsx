@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 
 import { MAX_IMAGE_BYTES } from "../domain/media/imagePolicy";
 import { isDeliverableImageUrl } from "../domain/email/newsletterTemplate";
+import { articleDirection } from "../domain/content/inlineDirection";
+import { BidiText } from "./BidiText";
 
 /**
  * Friendly image picker.
@@ -17,15 +19,19 @@ export function ImageUploader({
   altName,
   defaultUrl,
   defaultAlt,
+  language,
 }: {
   name: string;
   altName: string;
   defaultUrl?: string | null;
   defaultAlt?: string | null;
+  language?: string;
 }) {
   const [url, setUrl] = useState(defaultUrl ?? "");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [description, setDescription] = useState(defaultAlt ?? "");
+  const dir = articleDirection(language, description);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // An app-relative or localhost URL can never be loaded by an email recipient — the
@@ -60,12 +66,15 @@ export function ImageUploader({
 
       {url ? (
         <div className="flex flex-wrap items-start gap-4">
+          <figure className="w-40">
           {/* eslint-disable-next-line @next/next/no-img-element -- user upload served from our media route; no static optimisation wanted */}
           <img
             src={url}
-            alt="Selected newsletter image"
+            alt={description || "Selected newsletter image"}
             className="h-28 w-40 rounded-lg border border-slate-200 object-cover"
           />
+          {description && <figcaption dir={dir} className="mt-2 break-words text-start text-xs leading-relaxed text-slate-600"><BidiText text={description} dir={dir} /></figcaption>}
+          </figure>
           <div className="flex flex-col gap-2">
             {!isEmailReady ? (
               <p className="max-w-[16rem] rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-900">
@@ -132,13 +141,16 @@ export function ImageUploader({
 
       {url ? (
         <div className="mt-3">
-          <label className="block text-xs font-semibold text-slate-700">
+          <label htmlFor={altName} className="block text-xs font-semibold text-slate-700">
             Describe the image (shown if the picture cannot load)
           </label>
           <input
             type="text"
             name={altName}
-            defaultValue={defaultAlt ?? ""}
+            id={altName}
+            dir={dir}
+            value={description}
+            onChange={event => setDescription(event.target.value)}
             placeholder="For example: AXIS field team using a GPS receiver"
             className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-600/20"
           />

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
+import { readBoundedText } from "../../../../server/services/boundedRequest";
 
-import { getProductionEmailProvider } from "../../../../server/integrations/email";
-import { ingestProviderEvent } from "../../../../server/services/providerEventService";
+import { receiveProviderWebhook } from "../../../../server/services/providerWebhookService";
 
 /**
  * The Resend delivery-event endpoint (ADR-0025).
@@ -27,13 +27,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request): Promise<NextResponse> {
-  const provider = getProductionEmailProvider();
 
   // Raw text, never `request.json()`: parsing and re-serialising would change the
   // bytes and break — or worse, silently alter — what the signature protects.
   let rawBody: string;
   try {
-    rawBody = await request.text();
+    rawBody = await readBoundedText(request);
   } catch {
     return NextResponse.json({ ok: false }, { status: 400 });
   }
@@ -43,24 +42,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     headers[key.toLowerCase()] = value;
   });
 
-  const verification = provider.verifyWebhook({ rawBody, headers });
-
-  if (!verification.ok) {
-    // 401, and NO state change of any kind. Deliberately not 400: an unverifiable
-    // request is an authentication failure, not a malformed one.
-    return NextResponse.json({ ok: false }, { status: 401 });
-  }
-
-  // Verified. Now — and only now — the payload may be acted on.
-  let applied = 0;
-  for (const event of verification.events) {
-    const outcome = await ingestProviderEvent(event);
-    if (outcome.ok && !outcome.duplicate) applied += 1;
-  }
-
-  // 200 even for a duplicate or an event we do not act on: anything else makes Resend
-  // retry forever, and a retry storm is its own outage.
-  return NextResponse.json({ ok: true, applied }, { status: 200 });
+  try {
+    const result = await receiveProviderWebhook(rawBody, headers);
+    return NextResponse.json(result.body, { status: result.status, headers: { "Cache-Control": "no-store" } });
+  } catch { return NextResponse.json({ ok: false }, { status: 503 }); }
 }
 
 /**

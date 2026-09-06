@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
   // The Electron build packages this traced server outside app.asar and launches its
   // generated server.js with the packaged Electron executable's bundled Node runtime.
   output: "standalone",
+  poweredByHeader: false,
+  // Build once, promote the same image. The ID enables Next.js version-skew handling.
+  deploymentId: process.env.AXIS_DEPLOYMENT_ID,
 };
 
 export default nextConfig;

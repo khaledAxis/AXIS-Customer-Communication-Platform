@@ -100,6 +100,10 @@ export async function countCampaignUsages(contentItemId: string) {
   return getPrisma().campaignContentItem.count({ where: { contentItemId } });
 }
 
+export async function countTranslationUsages(contentItemId: string) {
+  return getPrisma().contentTranslation.count({ where: { sourceContentItemId: contentItemId } });
+}
+
 export async function deleteContentItem(id: string) {
   return getPrisma().contentItem.delete({ where: { id } });
 }

@@ -17,9 +17,92 @@ datasource db {
   // Prisma 7: the connection URL lives in prisma.config.ts (env DATABASE_URL), not here.
 }
 
+/// Shared hosted login throttle. HMAC keys contain no plaintext email address.
+model AuthRateLimit {
+  key       String   @id
+  attempts  Int
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
 // ============================================================================
 // Enums
 // ============================================================================
+
+enum BackgroundJobKind {
+  CRM_SYNC
+  AUTOMATION
+  DISPATCH
+}
+
+enum BackgroundJobState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  ATTENTION
+  CANCELED
+}
+
+model BackgroundJob {
+  id             String             @id @default(cuid())
+  uniqueKey      String             @unique
+  kind           BackgroundJobKind
+  state          BackgroundJobState @default(PENDING)
+  resourceId     String?
+  actorUserId    String
+  scheduledFor   DateTime
+  availableAt    DateTime           @default(now())
+  attempts       Int                @default(0)
+  leaseToken     String?
+  leaseExpiresAt DateTime?
+  errorCode      String?
+  result         Json?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([state, availableAt])
+  @@index([state, leaseExpiresAt])
+  @@index([kind, resourceId])
+}
+
+model JobSchedule {
+  key             String   @id
+  isEnabled       Boolean  @default(false)
+  intervalMinutes Int      @default(60)
+  actorUserId     String
+  nextRunAt       DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model SchedulerHeartbeat {
+  id         String   @id
+  lastTickAt DateTime
+}
+
+model ProviderRateLimit {
+  key             String   @id
+  nextAvailableAt DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/// Verified events are durable even if they arrive before the send response.
+model ProviderWebhookReceipt {
+  providerEventId  String    @id
+  normalizedEvent  Json
+  processedAt      DateTime?
+  effectsAppliedAt DateTime?
+  receivedAt       DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([processedAt, receivedAt])
+}
+
 enum Role {
   ADMIN
   MANAGER
@@ -225,6 +308,7 @@ enum ExclusionReason {
 }
 
 enum CampaignEventType {
+  ACCEPTED
   DELIVERED
   OPENED
   CLICKED
@@ -342,6 +426,10 @@ enum SyncItemClass {
 }
 
 enum AuditAction {
+  REPORT_EXPORTED
+  CAMPAIGN_DISPATCHED
+  CAMPAIGN_FAILED
+  JOB_CHANGED
   CAMPAIGN_CREATED
   CAMPAIGN_SUBMITTED
   CAMPAIGN_APPROVED
@@ -392,6 +480,9 @@ enum AuditAction {
   CONTENT_SOURCE_DISABLED
   CONTENT_INGESTION_RUN
   CONTENT_APPROVED
+  ARTICLE_TRANSLATION_REQUESTED
+  ARTICLE_TRANSLATION_DRAFT_CREATED
+  ARTICLE_TRANSLATION_FAILED
   CONTENT_REJECTED
   NEWSLETTER_DRAFT_CREATED_FROM_CONTENT
   AUTOMATION_CREATED
@@ -725,6 +816,8 @@ model ContentItem {
   source        ContentSource?        @relation(fields: [sourceId], references: [id], onDelete: SetNull)
   reviewedBy    User?                 @relation("ContentReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   campaignLinks CampaignContentItem[]
+  translationAttempts ContentTranslation[] @relation("TranslationSource")
+  translationResult ContentTranslation? @relation("TranslationResult")
 
   @@unique([sourceId, externalId]) // idempotent external ingestion where both present
   @@unique([sourceId, normalizedUrl]) // same article, same source, one row
@@ -732,6 +825,35 @@ model ContentItem {
   @@index([origin])
   @@index([language])
   @@index([sourceId])
+}
+
+enum ContentTranslationState {
+  RUNNING
+  READY
+  FAILED
+}
+
+/// An explicit, bounded machine-translation attempt. READY means a draft exists, not approval.
+model ContentTranslation {
+  id String @id @default(cuid())
+  sourceContentItemId String
+  sourceHash String
+  targetLanguage Language @default(HE)
+  state ContentTranslationState @default(RUNNING)
+  requestedById String
+  model String
+  errorCode String?
+  generatedContentItemId String? @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  completedAt DateTime?
+
+  sourceContentItem ContentItem @relation("TranslationSource", fields: [sourceContentItemId], references: [id], onDelete: Restrict)
+  generatedContentItem ContentItem? @relation("TranslationResult", fields: [generatedContentItemId], references: [id], onDelete: SetNull)
+
+  @@index([sourceContentItemId, sourceHash, createdAt])
+  @@index([state, createdAt])
+  @@index([requestedById, createdAt])
 }
 
 model Segment {
@@ -767,23 +889,27 @@ model Campaign {
   ///
   /// NULL means there is no public page, and the email then HIDES the
   /// "View as webpage" link rather than shipping a dead one.
-  publicToken           String?   @unique
-  publicPageEnabledAt   DateTime?
-  publicPageEnabledById String?
+  publicToken            String?   @unique
+  publicPageEnabledAt    DateTime?
+  publicPageEnabledById  String?
   // content snapshot frozen at submit/approve → history reproducible (authoritative record of what was sent)
-  snapshotSubject       String?
-  snapshotPreheader     String?
-  snapshotBodyHtml      String?
-  snapshotBodyText      String?
-  snapshotAt            DateTime?
-  createdById           String
-  approvedById          String? // four-eyes: must differ from creator (enforced server-side)
-  approvedAt            DateTime?
-  rejectionReason       String?
-  scheduledAt           DateTime?
-  sentAt                DateTime?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+  snapshotSubject        String?
+  snapshotPreheader      String?
+  snapshotBodyHtml       String?
+  snapshotBodyText       String?
+  snapshotAt             DateTime?
+  /// Canonical document frozen when an approved delivery is explicitly confirmed.
+  dispatchDocument       Json?
+  dispatchApprovalId     String?
+  deliveryConfirmedCount Int?
+  createdById            String
+  approvedById           String? // four-eyes: must differ from creator (enforced server-side)
+  approvedAt             DateTime?
+  rejectionReason        String?
+  scheduledAt            DateTime?
+  sentAt                 DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   creator             User                         @relation("CampaignCreator", fields: [createdById], references: [id], onDelete: Restrict)
   approver            User?                        @relation("CampaignApprover", fields: [approvedById], references: [id], onDelete: Restrict)
@@ -1029,6 +1155,8 @@ model CampaignRecipient {
   events        CampaignEvent[]
 
   @@unique([campaignId, normalizedEmail]) // <-- prevents double delivery
+  @@index([providerMessageId, normalizedEmail])
+  @@index([campaignId, state, attemptCount])
   @@index([campaignId])
   @@index([finalAudienceId])
   @@index([normalizedEmail])
@@ -1471,6 +1599,7 @@ model CampaignEvent {
   recipient CampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
 
   @@unique([providerEventId])
+  @@index([campaignId, occurredAt])
   @@index([campaignId])
   @@index([recipientId])
   @@index([type])

@@ -760,8 +760,9 @@ d("anti-mass-archival guard", () => {
     setCrmSourceForTesting(source);
     await syncCrmFromMonday();
 
-    const storedBefore = await prisma.company.count({ where: { archivedAt: null } });
-    expect(storedBefore).toBeGreaterThanOrEqual(20);
+    const ownedActive = { mondayBoardId: MONDAY_BOARDS.CUSTOMERS, mondayItemId: { in: guardIds }, archivedAt: null };
+    const storedBefore = await prisma.company.count({ where: ownedActive });
+    expect(storedBefore).toBe(20);
 
     source.setBoard(MONDAY_BOARDS.CUSTOMERS, [items[0]]);
     const summary = await syncCrmFromMonday();
@@ -770,8 +771,9 @@ d("anti-mass-archival guard", () => {
     expect(board?.archived).toBe(0);
     expect(board?.archiveSkippedReason).toMatch(/Refused to archive/);
 
-    // Nothing was archived — the projection survives the bad response intact.
-    expect(await prisma.company.count({ where: { archivedAt: null } })).toBe(storedBefore);
+    // Every owned row survives the incomplete response. Other suites can create or
+    // remove their own synthetic companies concurrently, outside this fixture.
+    expect(await prisma.company.count({ where: ownedActive })).toBe(storedBefore);
 
     const run = await prisma.syncRun.findFirst({
       where: { mondayBoardId: MONDAY_BOARDS.CUSTOMERS },

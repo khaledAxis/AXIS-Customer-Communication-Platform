@@ -5,6 +5,7 @@ import "./globals.css";
 import { getCurrentActor } from "../server/auth/session";
 import { AppShell } from "../ui/AppShell";
 import { signOutAction } from "./login/actions";
+import { customerDeliveryConfigured } from "../server/services/runtimeStatusService";
 
 /**
  * Root layout for the AXIS internal admin application.
@@ -30,12 +31,13 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
 
   return (
     <html lang="en" dir="ltr" className="h-full antialiased">
-      <body className="min-h-full bg-slate-50 text-slate-900">
+      <body className="min-h-full bg-background text-foreground">
         <AppShell
           viewer={
             actor ? { name: actor.name, email: actor.email, role: actor.role } : null
           }
           signOut={signOutAction}
+          customerDeliveryConfigured={customerDeliveryConfigured()}
         >
           {children}
         </AppShell>

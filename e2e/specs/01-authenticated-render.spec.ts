@@ -34,6 +34,7 @@ const ADMIN_PAGES: { path: string; heading: RegExp; name: string }[] = [
   { path: "/newsletters/new", heading: /newsletter/i, name: "New newsletter" },
   { path: "/automations", heading: /automations/i, name: "Automations" },
   { path: "/reports", heading: /reports/i, name: "Reports" },
+  { path: "/operations", heading: /operations/i, name: "Operations" },
   { path: "/help", heading: /help & activation guide/i, name: "Help" },
   { path: "/admin/users", heading: /staff accounts/i, name: "Admin users" },
   {

@@ -123,6 +123,7 @@ export async function resolveSegmentCandidates(
   prisma: PrismaClient,
   definition: SegmentDefinition,
   now: Date = new Date(),
+  emailScope?: readonly string[],
 ): Promise<SegmentCandidates> {
   const companyWhere = buildCompanyWhere(definition, now);
   const contactWhere = buildContactWhere(definition);
@@ -136,7 +137,7 @@ export async function resolveSegmentCandidates(
 
   if (definition.include.companyEmails) {
     const companies = await prisma.company.findMany({
-      where: companyWhere,
+      where: emailScope ? { AND: [companyWhere ?? {}, { companyEmailNorm: { in: [...emailScope] } }] } : companyWhere,
       select: {
         id: true,
         name: true,
@@ -162,7 +163,7 @@ export async function resolveSegmentCandidates(
         companyId: company.id,
       });
     }
-  } else if (companyConstrained) {
+  } else if (companyConstrained && !emailScope) {
     // Company emails are excluded from the audience, but the company filter
     // still has to be counted for the "companies matched" figure.
     matchedCompanies = await prisma.company.count({ where: companyWhere });
@@ -182,7 +183,7 @@ export async function resolveSegmentCandidates(
         : contactWhere;
 
     const contacts = await prisma.contact.findMany({
-      where,
+      where: emailScope ? { AND: [where ?? {}, { emailNorm: { in: [...emailScope] } }] } : where,
       select: {
         id: true,
         fullName: true,
@@ -213,7 +214,7 @@ export async function resolveSegmentCandidates(
         companyId: link?.companyId,
       });
     }
-  } else if (contactWhere) {
+  } else if (contactWhere && !emailScope) {
     matchedContacts = await prisma.contact.count({ where: contactWhere });
   }
 

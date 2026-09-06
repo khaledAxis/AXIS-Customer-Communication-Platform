@@ -10,8 +10,8 @@ import { buttonPrimary, buttonSecondary, buttonSubtle } from "./primitives";
  *
  * None of them sends anything. "Prepare final audience" freezes who would receive the
  * newsletter; "Approve" records that a person accepted that exact newsletter to that
- * exact frozen audience. Production sending is a separate control that does not
- * exist yet, and the wording here says so rather than implying a next step.
+ * exact frozen audience. Customer scheduling is a separate control with runtime
+ * release gates and an additional typed recipient-count confirmation.
  *
  * Approving asks twice, naming the recipient count, because it is the action a person
  * would later point at to say "this was authorised".
@@ -151,7 +151,7 @@ export function ApproveProductionButtons({
               </p>
               <p className="mt-1 text-xs text-amber-900">
                 This records the approval only. No email is sent, no delivery record is
-                created, and production sending stays locked. If the newsletter or the
+                created, and no delivery is scheduled. If the newsletter or the
                 audience changes afterwards, this approval stops being valid.
               </p>
               <div className="mt-2 flex flex-wrap gap-2">

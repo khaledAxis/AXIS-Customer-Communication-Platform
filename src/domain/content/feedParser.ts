@@ -18,6 +18,8 @@
  * Pure: no I/O, no network, no framework imports.
  */
 
+import { articlePlainText, articleUrl, normalizeArticleSource } from "./articleFormat";
+
 export interface ParsedFeedItem {
   title: string;
   /** The article's link, as the feed gave it. Not yet validated or normalized. */
@@ -101,13 +103,7 @@ function decodeEntities(value: string): string {
 
 /** Strips any markup an excerpt carries, then collapses whitespace. */
 export function stripMarkup(value: string): string {
-  return decodeEntities(
-    value
-      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-      .replace(/<[^>]*>/g, " "),
-  )
-    .replace(/\s+/g, " ")
-    .trim();
+  return articlePlainText(decodeEntities(value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")));
 }
 
 function unwrapCdata(value: string): string {
@@ -199,14 +195,23 @@ function atomLink(entryXml: string): string | null {
   return fallback;
 }
 
-function imageFrom(itemXml: string): string | null {
+function imageFrom(itemXml: string, baseUrl?: string | null): string | null {
   // RSS enclosure, Media RSS thumbnail/content, in that order of specificity.
   for (const tag of ["enclosure", "media:thumbnail", "media:content"]) {
     for (const open of openTags(itemXml, tag)) {
       const type = attribute(open, "type");
       if (type && !type.toLowerCase().startsWith("image/")) continue;
       const url = attribute(open, "url") ?? attribute(open, "href");
-      if (url) return url;
+      const resolved = articleUrl(url, baseUrl);
+      if (resolved) return resolved;
+    }
+  }
+  // Publishers such as HubSpot place their hero inside escaped description HTML.
+  for (const tag of ["description", "summary", "content:encoded", "content"]) {
+    const fragment = blocks(itemXml, tag)[0];
+    if (fragment) {
+      const image = normalizeArticleSource(unwrapCdata(fragment), baseUrl).images[0];
+      if (image) return image.url;
     }
   }
   return null;
@@ -263,10 +268,10 @@ function parseRss(xml: string): ParsedFeed {
         // A permalink guid is a usable link when <link> is missing.
         link: link ?? (guidIsPermalink ? guidValue : null),
         externalId: guidValue,
-        summary: truncate(text(item, "description", "summary"), MAX_SUMMARY_CHARS),
+        summary: truncate(text(item, "description", "summary", "content:encoded"), MAX_SUMMARY_CHARS),
         author: text(item, "dc:creator", "author"),
         publishedAt: parseDate(text(item, "pubDate", "dc:date")),
-        imageUrl: imageFrom(item),
+        imageUrl: imageFrom(item, link ?? guidValue),
       };
     })
     // An article with no title at all is not something a person can review.
@@ -299,7 +304,7 @@ function parseAtom(xml: string): ParsedFeed {
         ),
         author: authorBlock ? text(authorBlock, "name") : null,
         publishedAt: parseDate(text(entry, "published", "updated")),
-        imageUrl: imageFrom(entry),
+        imageUrl: imageFrom(entry, atomLink(entry)),
       };
     })
     .filter((item) => item.title.trim() !== "");

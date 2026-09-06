@@ -93,8 +93,8 @@ export interface ReadinessInput {
     fourEyesProblem: string | null;
   };
   production: {
-    /** Always false in this milestone. Kept as an input so the rule is visible. */
     enabled: boolean;
+    problem?: string;
   };
 }
 
@@ -392,17 +392,14 @@ export function evaluateSendReadiness(input: ReadinessInput): ReadinessResult {
   );
 
   // ---------------------------- INFRASTRUCTURE ---------------------------
-  // Hard-wired BLOCKED. `production.enabled` is read only so that a future change
-  // has to touch this line deliberately: there is no delivery engine behind it, so a
-  // flag flipped anywhere else must not be able to turn this check green.
-  void production.enabled;
   checks.push(
     check(
       "production",
       ReadinessGroup.INFRASTRUCTURE,
       "Production sending",
-      ReadinessStatus.BLOCKED,
-      "Production customer sending has not been enabled.",
+      production.enabled ? ReadinessStatus.READY : ReadinessStatus.BLOCKED,
+      production.enabled ? "Server release and provider checks passed. A typed audience confirmation is still required."
+        : production.problem ?? "Production customer sending has not been enabled.",
     ),
   );
 

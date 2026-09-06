@@ -1,6 +1,8 @@
 import "server-only";
 
 import type { Prisma } from "@prisma/client";
+import { articlePlainText, normalizeArticleSource, presentArticle } from "../../domain/content/articleFormat";
+import { fetchArticleImage } from "../integrations/content/feedFetcher";
 
 import { validateSourceUrl } from "../../domain/content/sourceUrl";
 import { MAX_IMAGE_BYTES, sniffImageMime } from "../../domain/media/imagePolicy";
@@ -68,7 +70,7 @@ export async function listInbox(query: InboxQuery = {}) {
   const search = query.search?.trim();
   const since = query.since ? new Date(query.since) : null;
 
-  return prisma.contentItem.findMany({
+  const items = await prisma.contentItem.findMany({
     where: {
       origin: "INGESTED",
       ...stateFilter(query.filter),
@@ -98,6 +100,7 @@ export async function listInbox(query: InboxQuery = {}) {
       _count: { select: { campaignLinks: true } },
     },
   });
+  return items.map(presentArticle);
 }
 
 export async function countInbox() {
@@ -115,7 +118,7 @@ export async function countInbox() {
 
 export async function getReviewItem(id: string) {
   await requireCapability(Capability.MANAGE_CONTENT);
-  return getPrisma().contentItem.findUnique({
+  const item = await getPrisma().contentItem.findUnique({
     where: { id },
     include: {
       source: { select: { id: true, name: true, baseUrl: true, categories: true } },
@@ -125,6 +128,7 @@ export async function getReviewItem(id: string) {
       },
     },
   });
+  return item ? presentArticle(item) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +192,7 @@ export async function saveEditorial(
     where: { id },
     data: {
       axisHeadline: normalize(input.axisHeadline, 300),
-      axisSummary: normalize(input.axisSummary, 1200),
+      axisSummary: normalize(articlePlainText(input.axisSummary), 1200),
       ctaLabel,
       ctaUrl,
       internalNote: normalize(input.internalNote, 2000),
@@ -286,41 +290,27 @@ export async function importArticleImage(
 
   const item = await prisma.contentItem.findUnique({
     where: { id },
-    select: { id: true, imageUrl: true, externalUrl: true, canonicalUrl: true },
+    select: { id: true, imageUrl: true, summary: true, externalUrl: true, canonicalUrl: true },
   });
   if (!item) {
     return { ok: false, errors: [{ field: "id", message: "That article no longer exists." }] };
   }
 
-  const candidate = item.imageUrl;
+  const candidate = item.imageUrl || normalizeArticleSource(item.summary, item.externalUrl).images[0]?.url;
   const validated = validateSourceUrl(candidate);
   if (!validated.ok) {
     return { ok: false, errors: [{ field: "imageUrl", message: validated.message }] };
   }
 
-  let response: Response;
-  try {
-    response = await fetch(validated.url, {
-      redirect: "error", // an image redirect is not worth re-validating a hop for
-      credentials: "omit",
-      cache: "no-store",
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch {
+  const fetched = await fetchArticleImage(validated.url);
+  if (!fetched.ok) {
     return {
       ok: false,
-      errors: [{ field: "imageUrl", message: "That picture could not be downloaded." }],
+      errors: [{ field: "imageUrl", message: fetched.message }],
     };
   }
 
-  if (!response.ok) {
-    return {
-      ok: false,
-      errors: [{ field: "imageUrl", message: "That picture could not be downloaded." }],
-    };
-  }
-
-  const buffer = new Uint8Array(await response.arrayBuffer());
+  const buffer = fetched.bytes;
   if (buffer.byteLength === 0 || buffer.byteLength > MAX_IMPORT_BYTES) {
     return {
       ok: false,

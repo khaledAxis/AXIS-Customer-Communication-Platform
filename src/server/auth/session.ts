@@ -14,6 +14,8 @@ import {
   type Role,
 } from "../../domain/auth/authorization";
 import { getPrisma } from "../db/prisma";
+import { currentJob } from "../jobs/context";
+import { jobMayUse } from "../../domain/jobs/policy";
 
 /**
  * The Data Access Layer for identity (ADR-0023, and the pattern the Next.js
@@ -117,6 +119,15 @@ const loadSessionActor = cache(async (): Promise<Actor | null> => {
 
 /** The signed-in actor, or null. Never throws — for pages that adapt to both. */
 export async function getCurrentActor(): Promise<Actor | null> {
+  const claim = currentJob();
+  if (claim) {
+    const job = await getPrisma().backgroundJob.findFirst({ where: {
+      id: claim.jobId, state: "RUNNING", leaseToken: claim.leaseToken, leaseExpiresAt: { gt: new Date() },
+    } });
+    if (!job) return null;
+    return getPrisma().user.findFirst({ where: { id: job.actorUserId, isActive: true, isSystemAccount: false },
+      select: { id: true, email: true, name: true, role: true, isActive: true, isSystemAccount: true, mustChangePassword: true } });
+  }
   // Under the test runner there is no HTTP request and therefore no session cookie,
   // so the seam is the ONLY source of identity: unset means nobody is signed in.
   // Falling through to the cookie path here would not find a session anyway.
@@ -187,6 +198,13 @@ export async function requireActor(): Promise<Actor> {
 
 /** The standard gate for a mutation: signed in, active, and holding the capability. */
 export async function requireCapability(capability: Capability): Promise<Actor> {
+  const claim = currentJob();
+  if (claim) {
+    const job = await getPrisma().backgroundJob.findFirst({ where: {
+      id: claim.jobId, state: "RUNNING", leaseToken: claim.leaseToken, leaseExpiresAt: { gt: new Date() },
+    } });
+    if (!job || !jobMayUse(job.kind, capability)) throw new NotAuthorizedError(capability);
+  }
   const actor = await getCurrentActor();
   return assertCan(actor, capability);
 }

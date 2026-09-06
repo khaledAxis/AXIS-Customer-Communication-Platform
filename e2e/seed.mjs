@@ -66,9 +66,9 @@ async function upsertUser(email, name, role) {
 // Wipe prior E2E fixtures (this database only, and only rows tagged as ours)
 // ---------------------------------------------------------------------------
 async function clearPriorFixtures() {
-  await prisma.qaReviewCheck.deleteMany({ where: { send: { subject: { contains: TAG } } } });
-  await prisma.qaEmailSend.deleteMany({ where: { subject: { contains: TAG } } });
-  await prisma.qaEmailRun.deleteMany({ where: { label: { contains: TAG } } });
+  await prisma.qaReviewCheck.deleteMany({ where: { send: { origin: "TEST_FIXTURE", fixtureOwner: TAG } } });
+  await prisma.qaEmailSend.deleteMany({ where: { origin: "TEST_FIXTURE", fixtureOwner: TAG } });
+  await prisma.qaEmailRun.deleteMany({ where: { origin: "TEST_FIXTURE", fixtureOwner: TAG } });
 
   const campaigns = await prisma.campaign.findMany({
     where: { name: { contains: TAG } },
@@ -78,6 +78,7 @@ async function clearPriorFixtures() {
   await prisma.campaignContentItem.deleteMany({ where: { campaignId: { in: campaignIds } } });
   await prisma.campaign.deleteMany({ where: { id: { in: campaignIds } } });
 
+  await prisma.contentTranslation.deleteMany({ where: { sourceContentItem: { title: { contains: TAG } } } });
   await prisma.contentItem.deleteMany({ where: { title: { contains: TAG } } });
   await prisma.contentIngestionRun.deleteMany({
     where: { source: { name: { contains: TAG } } },
@@ -162,6 +163,22 @@ for (const [index, title] of [
 }
 
 // ---------------------------------------------------------------------------
+// A synthetic translated draft; no provider is involved in browser fixtures.
+// The source hash deliberately differs to exercise the changed-source warning.
+const translatedArticle = await prisma.contentItem.create({ data: {
+  title: `${TAG} מדידות מדויקות עם NavVis CLX`,
+  summary: "גרסה עברית לבדיקה עם טווח מדידה של 40 m.",
+  bodyText: "## מיפוי מהשטח\n\nמערכת **NavVis CLX** יוצרת ענן נקודות.\n\n- טווח מדידה של 40 m\n- [לכתבה המקורית](https://fixtures.example.com/article-0)",
+  language: "HE", origin: "INGESTED", reviewState: "PENDING_REVIEW",
+  sourceId: source.id, sourceName: source.name, externalUrl: articles[0].externalUrl,
+  createdById: admin.id,
+} });
+await prisma.contentTranslation.create({ data: {
+  sourceContentItemId: articles[0].id, sourceHash: "synthetic-before-source-edit",
+  targetLanguage: "HE", state: "READY", requestedById: admin.id,
+  model: "synthetic-browser-fixture", generatedContentItemId: translatedArticle.id, completedAt: new Date(),
+} });
+
 // A draft campaign with content (drives /newsletters and the editor)
 // ---------------------------------------------------------------------------
 const campaign = await prisma.campaign.create({
@@ -191,7 +208,8 @@ await prisma.campaignContentItem.createMany({
 const qaRun = await prisma.qaEmailRun.create({
   data: {
     label: `${TAG} closed QA run`,
-    origin: "LIVE",
+    origin: "TEST_FIXTURE",
+    fixtureOwner: TAG,
     status: "CLOSED",
     plannedCount: 2,
     closedAt: new Date(),
@@ -206,7 +224,8 @@ for (const [index, [recipient, scenarioId]] of [
     await prisma.qaEmailSend.create({
       data: {
         runId: qaRun.id,
-        origin: "LIVE",
+        origin: "TEST_FIXTURE",
+        fixtureOwner: TAG,
         recipient,
         subject: `[AXIS Newsletter Platform TEST] ${TAG} fixture ${index}`,
         scenarioId,
@@ -248,6 +267,7 @@ writeFileSync(
         qaRunId: qaRun.id,
         qaSendIds: qaSends.map((s) => s.id),
         pendingArticleId: articles.find((a) => a.reviewState === "PENDING_REVIEW").id,
+        translatedArticleId: translatedArticle.id,
         approvedArticleIds: articles
           .filter((a) => a.reviewState === "APPROVED")
           .map((a) => a.id),

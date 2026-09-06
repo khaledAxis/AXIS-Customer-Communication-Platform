@@ -85,7 +85,7 @@ function toContentItemData(
     normalizedUrl: identity.normalizedUrl,
     // NOT imported into Cloudinary here. The URL is recorded so a reviewer can see
     // the thumbnail; importing an asset is a separate, deliberate human action.
-    imageUrl: null,
+    imageUrl: item.imageUrl && validateSourceUrl(item.imageUrl).ok ? item.imageUrl : null,
     publishedAt: item.publishedAt,
     ingestedAt: new Date(),
   };

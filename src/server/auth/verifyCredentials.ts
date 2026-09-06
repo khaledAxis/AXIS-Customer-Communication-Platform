@@ -4,7 +4,7 @@ import { signInRefusal } from "../../domain/auth/authorization";
 import { SignInInputError, parseSignIn } from "../../domain/auth/credentials";
 import { getPrisma } from "../db/prisma";
 import { verifyPassword } from "./password";
-import { consumeSignInAttempt, releaseSignInAttempt } from "./rateLimit";
+import { consumeLoginAttempt, releaseLoginAttempt } from "./hostedRateLimit";
 import { recordFailedSignIn, recordSuccessfulSignIn } from "./signInAudit";
 import type { SignInFailureCause } from "./types";
 
@@ -20,7 +20,8 @@ import type { SignInFailureCause } from "./types";
  *
  *  1. **Parse first.** A malformed submission never reaches the database.
  *  2. **Throttle second.** A login endpoint that runs Argon2 for every request is its
- *     own denial of service, so a refused attempt costs one map lookup.
+ *     own denial of service, so a refused attempt skips password hashing. Hosted
+ *     replicas share an atomic PostgreSQL counter; local/desktop uses a map.
  *  3. **Verify the password BEFORE the account-state checks.** A wrong password and a
  *     deactivated account then cost the same and look the same from outside; checking
  *     `isActive` first would let an attacker enumerate accounts by timing.
@@ -49,7 +50,7 @@ export async function verifyCredentials(raw: {
     throw error;
   }
 
-  if (!consumeSignInAttempt(credentials.email)) {
+  if (!(await consumeLoginAttempt(credentials.email))) {
     await recordFailedSignIn(credentials.email, "RATE_LIMITED");
     return { ok: false, cause: "RATE_LIMITED" };
   }
@@ -84,7 +85,7 @@ export async function verifyCredentials(raw: {
     return { ok: false, cause: refusal };
   }
 
-  releaseSignInAttempt(credentials.email);
+  await releaseLoginAttempt(credentials.email);
   await recordSuccessfulSignIn(user.id, user.email);
 
   return { ok: true, userId: user.id, email: user.email };

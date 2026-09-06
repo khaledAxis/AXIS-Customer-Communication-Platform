@@ -5,7 +5,32 @@ that keep it maintainable. Future-only components are labeled **[Future]** and m
 until their milestone. When architecture changes, update this file and add an ADR.
 
 Design priorities (in order): **correctness & sending safety → maintainability → simplicity**.
+
+Article input adaptation (ADR-0036): bounded text/Markdown/HTML and formatted clipboard
+content pass through the pure `articleFormat` converter, then the restricted markup
+renderer and the canonical newsletter renderer. `parse5` parses HTML only; publisher
+markup/CSS is never emitted. The same normalization cleans incoming feed excerpts and
+provides a read-only compatibility view for existing drafts. Stored dispatch documents
+remain authoritative. Pictures keep their aspect ratio; table cells become readable rows.
 The system is small (~500–2,000 contacts); avoid infrastructure that scale does not yet justify.
+
+Reviewed Hebrew translation (ADR-0037): a signed-in staff action normalizes an external
+article, protects its formatting/facts, and invokes the server-only `TranslationProvider`
+port. The OpenAI adapter returns structured text with no tools. `ContentTranslation`
+tracks bounded, deduplicated attempts in PostgreSQL; no transaction spans the API call.
+Successful validation and an unchanged source create a separate HE/PENDING_REVIEW article
+atomically with provenance and audit history. Source comparison, editing and human review
+precede newsletter use. No CRM data, internal notes, automatic ingestion translation or
+email is involved. See [configuration and workflow](hebrew-translation.md).
+
+Regular ChatGPT (ADR-0038) also works through a copy/paste path: pure prompt preparation,
+an actor/source-bound signed receipt, external user-operated translation, and validated
+import into the same Hebrew draft/provenance model. This path performs no provider call
+and requires no API credits. Pasted model identity is unverified; human review still applies.
+Both translation methods show the saved source's coverage: missing body, readable passages,
+body word count and apparent truncation. Prompt preparation returns that same source view;
+source fingerprint changes reset the client preparation. Staff add full text through the
+existing editor. Presence of saved text is never presented as verified article completeness.
 
 ---
 
@@ -346,16 +371,46 @@ flowchart TB
 ## 9. Deployment Model
 
 - **Local dev:** Next.js dev server + **PostgreSQL in Docker**. `.env.local` from `.env.example`.
-- **MVP deployment (assumption, to validate):** a single container image for the Next.js app +
-  managed/containerized PostgreSQL, behind HTTPS. A cron trigger (platform scheduler or a small
-  always-on instance) drives due-campaign sending **and CRM sync reconciliation**; a public route
-  receives Monday and email-provider webhooks. No Redis/worker until justified.
-- **Migrations** run as a deploy step (`prisma migrate deploy`). Secrets injected via the platform's
-  environment, never baked into the image.
-- Exact hosting (VM/Docker host vs managed platform) is an **open deployment decision**; the
-  single-deployable design keeps options open.
+- **Portable hosted baseline (ADR-0034):** non-root standalone application image, external PostgreSQL,
+  Cloudinary media, HTTPS edge and read-only app filesystem. `ops/compose.yaml` supplies resource
+  bounds and loopback publication; the host supplies TLS/load balancing, durable DB and secret injection.
+- **Shared authentication:** hosted replicas use PostgreSQL `AuthRateLimit` counters keyed by opaque
+  HMAC identity, plus an edge IP throttle. Every replica uses the same immutable image and Auth.js
+  secret. Bounded pools include a separate one-connection health pool.
+- **Migrations** run explicitly using the matching migrator image before traffic moves. Exact public
+  health routes distinguish liveness from database/migration readiness; neither touches a provider.
+- **Recovery and CI:** encrypted PostgreSQL archives restore only into a separate empty `_restore`
+  database. CI checks synthetic migrations/tests/browser flows, image builds, shared sessions and
+  throttling, database outage recovery and encrypted restore. It does not publish or deploy.
+- Exact hosting, TLS, offsite storage, backup scheduling and alert delivery remain operator setup.
+  See [operations.md](operations.md). ADR-0035 completes production dispatch, durable scheduled
+  reconciliation, signed Monday intake and reporting with a PostgreSQL queue and a small Node worker.
+  No Redis or BullMQ is added; actual external deployment and release remain operator actions.
 
 ## 10. High-Level Data Flow (Monday sync → send)
+
+### Current scheduled execution (ADR-0035)
+
+```mermaid
+flowchart LR
+  Monday[Signed Monday events] --> Intake[Verify JWT and deduplicate]
+  Intake --> Queue[(PostgreSQL jobs)]
+  Schedule[Staff schedules] --> Queue
+  Confirm[Approved message + typed confirmation] --> Queue
+  Worker[Node worker with dedicated secret] --> Tick[Exact authenticated tick route]
+  Tick --> Queue
+  Queue --> Lease[Lease + fresh staff capability checks]
+  Lease --> CRM[Read-only CRM reconciliation]
+  Lease --> Draft[Assisted draft preparation]
+  Lease --> Dispatch[Frozen document + live eligibility + atomic attempt]
+  Dispatch --> Resend[Customer provider method]
+  Resend --> Receipts[Verified durable event receipts]
+  Receipts --> Reports[Recipient facts and reports]
+```
+
+The worker has no provider/database credentials. App replicas share leases and customer provider
+pacing in PostgreSQL. Durable receipts reconcile exact message/address pairs even when they precede
+the send response. See [workflow operations](workflow-operations.md) for setup and recovery.
 
 ```mermaid
 sequenceDiagram
@@ -531,10 +586,11 @@ the unconfirmed count as a WARNING rather than silently treating it as permissio
 A destination row is **not** a `CampaignRecipient` — that table means delivery, and writing to it
 here would make "was this sent?" unanswerable.
 
-**No delivery path exists.** `sendReadinessService` imports no email provider, there is no server
-action or route handler for a production send, and the INFRASTRUCTURE readiness check is hard-wired
-`BLOCKED`. The SAFE TEST flow (preview → approve → send to `khaled-s@axis-gps.com`) is unchanged and
-completely separate: its own hash, its own single-use approval, its own `CampaignTestSend` ledger.
+**ADR-0035 completes the separate customer delivery path.** Readiness reports server release facts;
+typed scheduling freezes the canonical production document and approved audience into a durable job.
+The worker revalidates live eligibility and claims every attempt before provider I/O. The SAFE TEST
+flow (preview → approve → send to `khaled-s@axis-gps.com`) remains separate: its own hash,
+single-use approval and `CampaignTestSend` ledger. Default customer delivery remains disabled.
 
 ### 10.6 Authentication, roles and the four-eyes gate (ADR-0023)
 

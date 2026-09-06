@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentActor } from "../../server/auth/session";
 import { hasRealAdministrator } from "../../server/services/bootstrapService";
 import { LoginForm } from "../../ui/AuthForms";
+import { AxisMark } from "../../ui/Icon";
 import { signInAction } from "./actions";
 
 /**
@@ -47,8 +48,16 @@ export default async function LoginPage({
           : null;
 
   return (
-    <div className="flex min-h-[70vh] items-center py-10">
+    <div className="login-layout">
+      <section className="login-story" aria-label="AXIS Communication">
+        <div className="axis-brand"><AxisMark /><span>AXIS<span className="brand-caption">COMMUNICATION</span></span></div>
+        <h2>Expertise worth<br/>sharing.<br/>Connections<br/>worth building.</h2>
+        <p>Your workspace for thoughtful customer communication, from the first idea to the final review.</p>
+        <small>GPS &amp; MAPPING SOLUTIONS / HE · AR</small>
+      </section>
+      <div className="login-form-panel">
       <LoginForm action={signInAction} next={next} notice={notice} />
+      </div>
     </div>
   );
 }
