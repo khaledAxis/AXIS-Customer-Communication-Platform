@@ -32,6 +32,12 @@ body word count and apparent truncation. Prompt preparation returns that same so
 source fingerprint changes reset the client preparation. Staff add full text through the
 existing editor. Presence of saved text is never presented as verified article completeness.
 
+Browser article BiDi (ADR-0039) uses pure inline fragments shared by React text/captions
+and the browser profile of the restricted parser. It generates `bdi dir="ltr"` inside
+RTL article containers while preserving prose punctuation and URL syntax. Plain inputs,
+stored text and translation JSON are untouched. The canonical email path retains its
+existing Outlook-compatible spans.
+
 ---
 
 ## 1. System Components (MVP)

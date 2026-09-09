@@ -14,12 +14,17 @@ export function inlineDirectionFragments(text: string, dir: TextDirection): Inli
     const url = /^(?:https?:\/\/|www\.|mailto:)/i.test(value);
     if (url) {
       // Keep balanced URL parentheses; detach closing prose brackets and punctuation.
-      while (value) {
-        const last = value.at(-1)!;
-        const opening = ({ ")": "(", "]": "[", "}": "{" } as Record<string, string>)[last];
-        if (/[.,;:!?…’”]/.test(last) || (opening && value.split(last).length > value.split(opening).length)) value = value.slice(0, -1);
+      // Count once so long untrusted bracket runs remain linear to render.
+      const unmatched: Record<string, number> = {};
+      for (const [close, open] of [[")", "("], ["]", "["], ["}", "{"]]) unmatched[close] = value.split(close).length - value.split(open).length;
+      let end = value.length;
+      while (end) {
+        const last = value[end - 1];
+        if (/[.,;:!?…’”]/.test(last)) end--;
+        else if (unmatched[last] > 0) { unmatched[last]--; end--; }
         else break;
       }
+      value = value.slice(0, end);
     }
     const previous = runs.at(-1);
     if (previous && !url && !previous.url && /^[ \t\u00a0]+$/.test(text.slice(previous.end, start))) previous.end = start + value.length;

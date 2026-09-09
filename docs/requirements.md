@@ -186,6 +186,10 @@ Corrected to the **real Monday CRM** (ADR-0009):
 - **[Future]** Automated network collectors (RSS/API/website) — **not** implemented yet (no fetching).
 
 ### 3.20 Reviewed Translation and Future Summarization
+- **Implemented (ADR-0039):** Hebrew editor previews, review previews and captions keep
+  RTL containers and isolate Latin phrases with `bdi dir="ltr"`. Rendering preserves
+  sentence punctuation and never inserts markup or controls into saved text or translation
+  JSON. Native input fields remain plain text; live previews show isolation.
 - **Implemented (ADR-0038):** staff may use their regular ChatGPT account by copying a
   prepared prompt and importing its reply. This path requires no API configuration or
   credits. Import binds the reply to its source, validates protected content, refuses

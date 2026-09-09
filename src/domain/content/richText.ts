@@ -181,7 +181,8 @@ export function renderRichText(source: string | null | undefined, dir: "ltr" | "
           const items = block.items
             .map((item) => `<li style="${S.li}">${renderInline(item, dir, target)}</li>`)
             .join("");
-          return `<${block.kind} style="${S.list}${listPadding}">${items}</${block.kind}>`;
+          const listStyle = target === "browser" ? `list-style-type:${block.kind === "ul" ? "disc" : "decimal"};` : "";
+          return `<${block.kind} style="${S.list}${listPadding}${listStyle}">${items}</${block.kind}>`;
         }
         case "h2":
           return `<h2 style="${S.h2}">${renderInline(block.text, dir, target)}</h2>`;

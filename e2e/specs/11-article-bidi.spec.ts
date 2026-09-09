@@ -18,6 +18,8 @@ const body = [
 
 async function assertIsolation(preview: Locator) {
   await expect(preview).toHaveAttribute("dir", "rtl");
+  await expect(preview).toHaveCSS("overflow-wrap", "anywhere");
+  expect(await preview.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   for (const phrase of ["NavVis CLX", "NavVis VLX", "RTK", "SLAM", "BIM"]) {
     await expect(preview.locator('bdi[dir="ltr"]').filter({ hasText: new RegExp(`^${phrase}$`) }).first()).toBeVisible();
   }
@@ -26,6 +28,8 @@ async function assertIsolation(preview: Locator) {
   await expect(preview.locator("blockquote bdi").first()).toHaveText("NavVis VLX");
   await expect(preview.locator("ul li bdi").first()).toHaveText("RTK");
   await expect(preview.locator("ol li bdi").first()).toHaveText("NavVis CLX");
+  await expect(preview.locator("ul")).toHaveCSS("list-style-type", "disc");
+  await expect(preview.locator("ol")).toHaveCSS("list-style-type", "decimal");
   await expect(preview.locator("a")).toHaveAttribute("href", "https://example.com/guide?mode=RTK&format=BIM");
   const probe = preview.locator("p").filter({ hasText: /^בדיקה NavVis CLX, בשטח\.$/ });
   const geometry = await probe.evaluate(element => {
@@ -47,6 +51,13 @@ async function assertIsolation(preview: Locator) {
   expect(geometry.punctuation).toBe(", בשטח.");
 }
 
+async function capturePreview(preview: Locator, path: string) {
+  await preview.scrollIntoViewIfNeeded();
+  // Leave room for the fixed app header; it must not obscure the rendering proof.
+  await preview.page().evaluate(() => window.scrollBy(0, -100));
+  await preview.screenshot({ path });
+}
+
 test("Hebrew editor and article previews isolate Latin fragments without rewriting saved text", async ({ page }, testInfo) => {
   const errors = new PageErrors(page);
   await loginAsAdmin(page);
@@ -66,7 +77,7 @@ test("Hebrew editor and article previews isolate Latin fragments without rewriti
   await page.setViewportSize({ width: 1440, height: 1100 });
   await assertIsolation(preview);
   await expect(page.locator("figcaption bdi").first()).toHaveText("NavVis VLX");
-  await preview.screenshot({ path: testInfo.outputPath("editor-rtl-desktop.png") });
+  await capturePreview(preview, testInfo.outputPath("editor-rtl-desktop.png"));
   await page.getByRole("button", { name: "Save article", exact: true }).click();
   await expect(page).toHaveURL(/\/content\/[^/]+\/edit\?saved=1/);
   const id = /\/content\/([^/]+)\/edit/.exec(page.url())![1];
@@ -78,15 +89,15 @@ test("Hebrew editor and article previews isolate Latin fragments without rewriti
   await page.setViewportSize({ width: 390, height: 844 });
   await assertIsolation(preview);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
-  await preview.screenshot({ path: testInfo.outputPath("editor-rtl-phone.png") });
+  await capturePreview(preview, testInfo.outputPath("editor-rtl-phone.png"));
   await page.goto(`/content/inbox/${id}`);
   await assertIsolation(preview);
   await expect(page.locator("figcaption")).toHaveAttribute("dir", "rtl");
   await expect(page.locator("figcaption bdi").first()).toHaveText("NavVis VLX");
-  await preview.screenshot({ path: testInfo.outputPath("article-rtl-phone.png") });
+  await capturePreview(preview, testInfo.outputPath("article-rtl-phone.png"));
   await page.setViewportSize({ width: 1440, height: 1100 });
   await assertIsolation(preview);
-  await preview.screenshot({ path: testInfo.outputPath("article-rtl-desktop.png") });
+  await capturePreview(preview, testInfo.outputPath("article-rtl-desktop.png"));
   await page.locator("figure").screenshot({ path: testInfo.outputPath("caption-rtl.png") });
   await page.goto("/content?filter=HE");
   const heading = page.getByRole("heading", { name: title, exact: true });

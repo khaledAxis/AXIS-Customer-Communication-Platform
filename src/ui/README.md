@@ -52,3 +52,9 @@ method button. Both routes end at the same editable, unapproved Hebrew draft.
 `TranslationSourceDetails` shows what text is available, flags a missing body or apparent
 truncation and links to the article-text editor. The translation panel is keyed by the
 saved source fingerprint so edits clear obsolete copy/paste preparation state.
+
+`BidiText` and `ArticleBodyPreview` share pure Latin-fragment segmentation (ADR-0039).
+Browser article views use `bdi dir="ltr"` within RTL containers; input values stay plain
+text. The body preview reuses the restricted parser with a browser display profile.
+Email rendering retains the existing canonical path. Caption/description previews use
+the same helper as titles, summaries and source text.

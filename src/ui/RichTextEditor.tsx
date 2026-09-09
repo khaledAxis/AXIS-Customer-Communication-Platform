@@ -11,8 +11,9 @@ import { BidiText } from "./BidiText";
  *
  * Deliberately not a heavyweight WYSIWYG dependency (ADR-0012). The toolbar writes
  * a restricted markup that the server renders with the SAME pure function used
- * here for the live preview — so what the user sees is what the email contains, and
- * no client-supplied HTML is ever stored.
+ * here for the live preview. Browser text uses bdi isolation; the email profile
+ * retains Outlook-compatible spans. Both escape the same content and structure.
+ * No client-supplied HTML is ever stored.
  */
 
 interface ToolbarAction {

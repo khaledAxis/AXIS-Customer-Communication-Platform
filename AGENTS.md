@@ -349,10 +349,16 @@ DRAFT ──submit──▶ PENDING_APPROVAL ──approve──▶ APPROVED ─
   renders. Displayed at 200px wide with `height:auto` + `max-width:100%` (never stretched or cropped),
   `dir="ltr"` so RTL cannot reorder it, alt text `AXIS Advanced Mapping Solutions`. Cloudinary logos
   are delivered at `c_limit,w_440,q_auto` — a full-size logo is real weight in every message.
-- **Latin phrases inside RTL copy are isolated** with `<span dir="ltr">` via `escapeWithLtrIsolation`,
+- **Latin phrases inside RTL email copy are isolated** with `<span dir="ltr">` via `escapeWithLtrIsolation`,
   as **whole phrases** (spaces/commas/ampersands included) — per-word isolation leaves the separators
   neutral and lets punctuation drift to the wrong edge. Isolation runs **before** escaping so an entity
   can never be split. Use the `dir` attribute, not `unicode-bidi` (Outlook ignores the CSS).
+- **Browser article BiDi (ADR-0039):** browser previews use the same restricted parser with
+  `<bdi dir="ltr">`; labels/captions use `BidiText` with the same pure fragment rules.
+  HE/AR containers remain RTL. Whole Latin phrases, models, acronyms, URLs and units stay
+  LTR; surrounding sentence punctuation stays outside where practical. Attributes, stored
+  text, translation JSON and frozen email documents are never rewritten. Native text inputs
+  remain plain text with RTL direction; their rendered previews show isolation.
 - **Image hosting (ADR-0016):** uploads go through the `MediaStore` port — `CloudinaryMediaStore` when
   `MEDIA_PROVIDER=cloudinary`, else local disk. **Local validation (magic bytes, allow-list, SVG
   rejection, 5 MB cap, filename sanitisation) always runs BEFORE any provider call** — the provider is

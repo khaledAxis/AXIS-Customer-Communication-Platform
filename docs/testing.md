@@ -328,6 +328,11 @@ source refusal and zero provider calls. `e2e/specs/10-chatgpt-translation.spec.t
 clipboard copying, malformed reply feedback, responsive layout and persisted Hebrew
 draft creation with an invented reply. ChatGPT itself is not automated or contacted.
 Source coverage tests distinguish an excerpt from a saved body and image-only input.
+ADR-0039 BiDi checks cover NavVis CLX, NavVis VLX, RTK, SLAM and BIM inside Hebrew,
+punctuation outside isolation, URLs, accented Latin, every supported text block and
+captions. Browser checks measure actual character order and computed directions, check
+local overflow/list markers, save/reload exact plain values and capture RTL desktop/phone
+proof. The email renderer's existing tests remain unchanged.
 The browser flow starts with a truncated excerpt, follows the full-text editor link,
 saves additional paragraphs and proves that a fresh prompt and imported draft include
 the final paragraph. Saving clears the old prompt; the server refuses stale responses.

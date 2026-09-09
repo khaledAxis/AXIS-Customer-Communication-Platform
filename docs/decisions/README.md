@@ -72,6 +72,7 @@ default awaiting confirmation from stakeholders.
 | [0036](0036-mixed-format-article-adaptation.md) | Mixed-format article input, normalized publisher excerpts and adaptive email-safe content | Accepted — **no automatic approval, asset download or sending** |
 | [0037](0037-reviewed-hebrew-article-translation.md) | OpenAI translation into a separate Hebrew draft with source comparison, RTL and bounded audited requests | Accepted — **human review required; disabled without configuration** |
 | [0038](0038-chatgpt-copy-paste-translation.md) | Regular ChatGPT through protected prompt copying and validated Hebrew draft import | Accepted — **no API credits or provider calls; manual review required** |
+| [0039](0039-browser-article-bidi.md) | Browser article BiDi isolation in editor, previews and captions | Accepted — **rendering only; stored text and translation JSON unchanged** |
 
 ---
 
